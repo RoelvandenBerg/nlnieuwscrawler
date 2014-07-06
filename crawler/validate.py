@@ -2,7 +2,7 @@
 __author__ = 'roelvdberg@gmail.com'
 
 import re
-from crawler.settings import NOFOLLOW
+from settings import NOFOLLOW
 
 
 # Regex taken from Django:

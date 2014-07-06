@@ -4,14 +4,16 @@ __author__ = 'roelvdberg@gmail.com'
 from datetime import datetime as dt
 import dateutil.parser as dtparser
 import logging
+from time import sleep
 import urllib.parse
 import urllib.request as request
 
 from lxml import etree
+import sqlalchemy
 
-from crawler import model as model
-from crawler.settings import USER_AGENT_INFO, USER_AGENT, LOG_FILENAME
-import crawler.validate as validate
+import model
+from settings import USER_AGENT_INFO, USER_AGENT, LOG_FILENAME
+import validate
 
 # setup logger
 logger = logging.getLogger(__name__)
@@ -84,7 +86,7 @@ class Head(object):
         """
         for el in self.root:
             self.search(el)
-        if not 'time' in self.__dir__():
+        if not 'time' in self.__dict__:
             try:
                 self.time = self.html.xpath(r'.//time')[0]
             except IndexError:
@@ -355,24 +357,39 @@ class Webpage(object):
 
         :param item: SQL Alchemy database item
         """
-        self.session.add(item)
-        self.session.commit()
+        try:
+            self.session.add(item)
+            self.session.commit()
+        except sqlalchemy.exc.OperationalError:
+            self.session.rollback()
+            sleep(5)
+            self.store_model(item)
 
     @property
     def website_entry(self):
         """
         Website entry in database that belongs to this webpage.
         """
-        return self.session.query(model.Website).filter_by(
-            url=self.base_url).one()
+        try: 
+            return self.session.query(model.Website).filter_by(
+                url=self.base_url).one()
+        except sqlalchemy.exc.OperationalError:
+            self.session.rollback()
+            sleep(5)
+            return self.website_entry
 
     @property
     def webpage_entry(self):
         """
         Webpage entry in database that belongs to this webpage.
         """
-        return self.session.query(model.Webpage).filter_by(
-            url=self.url).one()
+        try:
+            return self.session.query(model.Webpage).filter_by(
+                url=self.url).one()
+        except sqlalchemy.exc.OperationalError:
+            self.session.rollback()
+            sleep(5)
+            return self.webpage_entry
 
     def store_page(self):
         """

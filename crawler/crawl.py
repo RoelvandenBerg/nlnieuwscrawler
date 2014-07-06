@@ -10,11 +10,11 @@ import time
 import urllib.error
 import urllib.parse
 
-from crawler.settings import *
-import crawler.validate as validate
-import crawler.model as model
-import crawler.robot as robot
-import crawler.webpage as webpage
+from settings import *
+import validate
+import model
+import robot
+import webpage
 
 
 # setup logger
@@ -243,7 +243,7 @@ class Website(object):
             try:
                 time.sleep(
                     self.robot_txt.crawl_delay + start_time - time.time())
-            except ValueError:
+            except:    # ONTZETTENDE HACK
                 pass
 
     def _run_once(self):

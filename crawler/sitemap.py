@@ -8,7 +8,7 @@ from zipfile import ZipFile
 
 import lxml.etree as etree
 
-import crawler.webpage as webpage
+import webpage
 
 
 class SitemapMixin(object):
@@ -20,10 +20,9 @@ class SitemapMixin(object):
         self.visited = []
 
     def __add__(self, other):
-        sum_ = copy.deepcopy(self)
-        sum_.visited += other.visited
-        sum_.links += other.links
-        return sum_
+        self.visited += other.visited
+        self.links += other.links
+        return self
 
     def __iadd__(self, other):
         return self.__add__(other)

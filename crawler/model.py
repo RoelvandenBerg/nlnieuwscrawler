@@ -11,7 +11,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import sessionmaker
 
-from crawler.settings import *
+from settings import *
 
 engine = create_engine('sqlite:///' + DATABASE_FILENAME, echo=VERBOSE)
 
@@ -79,7 +79,7 @@ def clear_all():
     for filename in [DATABASE_FILENAME, LOG_FILENAME]:
         try:
             os.remove(filename)
-        except FileNotFoundError:
+        except:
             pass
 
 
