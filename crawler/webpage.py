@@ -11,9 +11,9 @@ import urllib.request as request
 from lxml import etree
 from sqlalchemy.orm.exc import NoResultFound
 
-import crawler.model as model
-from crawler.settings import USER_AGENT_INFO, USER_AGENT
-import crawler.validate as validate
+import model
+from settings import USER_AGENT_INFO, USER_AGENT
+import validate
 
 # setup logger
 logger = logging.getLogger(__name__)
