@@ -18,7 +18,7 @@ USER_AGENT_INFO = {
 
 class RobotTxt(robotparser.RobotFileParser):
     """
-    Extention of robotparser, adds sitemap functionality
+    Extention of robotparser, adds sitemap functionality, mainly a copy.
     """
 
     def parse(self, lines):
@@ -68,6 +68,8 @@ class RobotTxt(robotparser.RobotFileParser):
                     if state != 0:
                         entry.rulelines.append(RuleLine(line[1], True))
                         state = 2
+                elif line[0] == 'sitemap':
+                    self.sitemap = Sitemap(line[1])
         if state == 2:
             self._add_entry(entry)
 
@@ -77,13 +79,14 @@ class BaseCrawler(object):
     Fetches site content from an [url]
     """
     tag = ""
+    name = "untitled"
     attr = None
     tags = None
 
     def __init__(self, url):
         self.url = url
 
-    def grab(self, url=None, *args, **kwargs):
+    def crawl(self, url=None, *args, **kwargs):
         if url == None:
             url = self.url
         data, headers = self._set_agent()
@@ -101,16 +104,6 @@ class BaseCrawler(object):
         pass
 
 
-class Sitemap(BaseCrawler):
-
-    def __init__(self, url):
-        # initialize with
-        pass
-
-    def parse(self):
-        pass
-
-
 class Crawler(BaseCrawler):
     """
     Fetches and parses site content from an [url]
@@ -123,7 +116,7 @@ class Crawler(BaseCrawler):
         parse_iterator = (self._get_attr(y) for x in self.trees
                           for y in x.iter(self.tag))
         parsed = self._parse_edit(parse_iterator)
-        setattr(self, tag, parsed)
+        setattr(self, name, parsed)
 
     def _parse_edit(self, iterator):
         return list(iterator)
@@ -149,10 +142,11 @@ class Crawler(BaseCrawler):
 class LinkCrawler(Crawler):
     tag = "a"
     attr = "href"
+    name = "links"
 
     def __init__(self, url):
         super().__init__(url)
-        self.robot = robotparser.RobotFileParser(URL)
+        self.robot = RobotTxt(url)
 
     def _parse_edit(self, iterator):
         return [x for x in iterator if self.can_fetch(x)]
@@ -160,6 +154,28 @@ class LinkCrawler(Crawler):
     def can_fetch(self, url):
         return self.robot.can_fetch(url)
 
+    def __iter__(self):
+        self.parse()
+        for site in self.robot.sitemap:
+            # TODO
+            yield site
+
+
+class Sitemap(LinkCrawler):
+    visited = []
+
+    def __init__(self, url):
+        self.url = url
+        self.parse()
+
+    def _parse_edit(self, iterator):
+        return iterator
+
+    def __iter__(self):
+        for link in self.links:
+            yield link
+            self.visited.append(link)
 
 class SimpleTextCrawl(Crawler):
     tag = "p"
+    name = "text"
