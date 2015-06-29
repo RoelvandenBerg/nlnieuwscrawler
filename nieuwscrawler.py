@@ -25,5 +25,6 @@ class TextCrawler(grab.Crawler):
     def parse(self):
         # get title
         # TODO: use iterparse
+
         pass
 
