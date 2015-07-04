@@ -151,7 +151,7 @@ class RobotTxt(robotparser.RobotFileParser):
                 line = line[:i]
             line = line.strip()
             if not line:
-                continuecontent
+                continue
             line = line.split(':', 1)
             if len(line) == 2:
                 line[0] = line[0].strip().lower()
