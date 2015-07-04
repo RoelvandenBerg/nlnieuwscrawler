@@ -1,7 +1,7 @@
 __author__ = 'roelvdberg@gmail.com'
 
 import copy
-import datetime.datetime as dt
+from datetime import datetime as dt
 import urllib.parse
 import urllib.request as request
 import urllib.robotparser as robotparser
@@ -11,6 +11,13 @@ from lxml import etree
 from crawler.model import Session
 from crawler.model import Paragraph
 from crawler.settings import *
+
+
+def stringify(string):
+    if string:
+        return str(string)
+    else:
+        return ""
 
 
 class Fetcher(object):
@@ -24,12 +31,13 @@ class Fetcher(object):
 
     def __init__(self, url):
         self.url = url
+        self.fetch()
 
     def fetch(self, url=None, *args, **kwargs):
         if url is None:
             url = self.url
         data, headers = self.agent
-        with request.urlopen(request.Request(url, data, headers)) as response:
+        with request.urlopen(request.Request(url)) as response:
             self.html = response.read()
         self.parse(*args, **kwargs)
 
@@ -48,7 +56,7 @@ class Fetcher(object):
                           for y in x.iter(self.tag))
         content = self._parse_edit(parse_iterator)
         if self.name:
-            setattr(self, self.name, parsed)
+            setattr(self, self.name, content)
         else:
             self.content = content
 
@@ -62,20 +70,19 @@ class Fetcher(object):
     def _get_attr(self, y):
         try:
             return y.attrib[self.attr]
-        except AttributeError:
+        except TypeError:
             return self._textwalk(y)
 
     def _textwalk(self, element):
-        children = [self._textwalk(x) + x.tail for x in element]
-        return element.text + "".join(children)
+        children = [self._textwalk(x) + stringify(x.tail) for x in element]
+        return stringify(element.text) + "".join(children)
 
 
 class ParagraphFetcher(Fetcher):
     tag = "p"
-    name = "text"
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, url):
+        super().__init__(url)
         self.session = Session()
 
     def store_content(self, baseurl):
@@ -122,6 +129,10 @@ class RobotTxt(robotparser.RobotFileParser):
     """
     Extention of robotparser, adds sitemap functionality, mainly a copy.
     """
+
+    def __init__(self, url):
+        self.sitemap = None
+        super().__init__(url)
 
     def parse(self, lines):
         """Parse the input lines from a robots.txt file.
@@ -183,17 +194,25 @@ class RobotTxt(robotparser.RobotFileParser):
 
 class Crawler(LinkFetcher):
     def __init__(self, url, fetcher=ParagraphFetcher):
-        super().__init__(url)
         self.robot = RobotTxt(url)
-        self.links += self.robot.sitemap.links
+        self.robot.read()
+        super().__init__(url)
+        try:
+            self.links += self.robot.sitemap.links
+        except AttributeError:
+            try:
+                self.links = self.robot.sitemap.links
+            except AttributeError:
+                pass
         self.fetcher = fetcher
         self.content = []
+        self.visited = []
 
     def _parse_edit(self, iterator):
         return [url for url in iterator if self._can_fetch(url)]
 
     def _can_fetch(self, url):
-        return self.robot.can_fetch(url)
+        return self.robot.can_fetch(USER_AGENT, url)
 
     def __iter__(self):
         self.parse()
@@ -208,9 +227,13 @@ class Crawler(LinkFetcher):
             yield link, fetcher.content
             self.visited.append(link)
 
+# TODO: Check if robotparser requires direct link to robots.txt
+# TODO: add base url if this is lacking
+
+
+
 
 if __name__ == "__main__":
     python_crawler = Crawler(BASE_URL)
-    for i in range(10):
-        url, content = python_crawler.next()
+    for url, content in python_crawler:
         print(url, content)
