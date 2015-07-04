@@ -1,6 +1,6 @@
 __author__ = 'roelvdberg@gmail.com'
 
-import crawler.crawl as grab
+import crawler.crawl as crawl
 from model import Session
 
 try:
@@ -12,7 +12,7 @@ except ImportError:
 session = Session()
 
 
-class TextCrawler(grab.Crawler):
+class NieuwsCrawler(crawl.Crawler):
     headers = ["h" + str(i + 1) for i in range(6)]
     alt_headers = ["strong"]
     paragraph = ["p", "article"]
