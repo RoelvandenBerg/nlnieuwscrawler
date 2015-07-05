@@ -9,5 +9,5 @@ USER_AGENT_INFO = {
 BASE_URL = "https://www.nelen-schuurmans.nl/"
 CRAWL_DEPTH = 2
 
-VERBOSE = True
+VERBOSE = False
 DATABASE_FILENAME = 'crawl.sqlite3'

@@ -89,17 +89,19 @@ class ParagraphFetcher(Fetcher):
     tag = "p"
 
     def __init__(self, url, html=None, base_url=None):
-        super().__init__(url)
+        super().__init__(url, html, base_url)
         self.session = Session()
 
-    def store_content(self, baseurl):
+    def store_content(self):
         for paragraph in self.content:
             new_item = Paragraph(
                 datetime=dt.now(),
-                site=self.url,
+                site=self.base_url,
                 paragraph=paragraph,
                 url=self.url
             )
+            self.session.add(new_item)
+            self.session.commit()
 
 
 class LinkFetcher(Fetcher):
@@ -231,18 +233,19 @@ class Crawler(LinkFetcher):
         return self.robot.can_fetch(USER_AGENT, url)
 
     def __iter__(self):
-        print(self.links)
         while len(self.links) > 0:
             link, current_depth = self.links.pop()
             if link[0] == "#":
                 continue
             if not "http" in link:
                 link = urllib.parse.urljoin(self.url, link)
-            fetcher = self.fetcher(link, self.url)
+            fetcher = self.fetcher(url=link, base_url=self.url)
+            fetcher.store_content()
             urlfetcher = LinkFetcher(link, fetcher.html)
             self.add_links(urlfetcher)
             try:
-                fetcher.store_content(link)
+
+
                 self.content.append(fetcher.content)
             except AttributeError:
                 print('error')
@@ -252,8 +255,7 @@ class Crawler(LinkFetcher):
 
 
 # TODO: Check if robotparser requires direct link to robots.txt
-# TODO: Find out what data / is acceptable for robots.txt
-# TODO: Database functionality
+# TODO: Find out what data / is acceptable for as useragent info
 # TODO: Crawl delay functionality
 
 if __name__ == "__main__":
