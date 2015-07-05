@@ -1,4 +1,4 @@
-USER_AGENT = 'Python3'
+USER_AGENT = 'Python-urllib/3.4'
 USER_AGENT_INFO = {
           'name' : 'python crawler',
           'organisation': '-',
@@ -6,7 +6,8 @@ USER_AGENT_INFO = {
           'language' : 'Python 3'
 }
 
-BASE_URL = "https://www.python.org/"
+BASE_URL = "https://www.nelen-schuurmans.nl/"
+CRAWL_DEPTH = 2
 
 VERBOSE = True
 DATABASE_FILENAME = 'crawl.sqlite3'

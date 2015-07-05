@@ -25,19 +25,26 @@ class Fetcher(object):
     Fetches site content from an [url]
     """
     tag = ""
-    name = "untitled"
+    name = None
     attr = None
     tags = None
 
-    def __init__(self, url):
+    def __init__(self, url, html=None, base_url=None):
+        if base_url:
+            self.base_url = base_url
+        else:
+            self.base_url = url
         self.url = url
+        self.html = html
         self.fetch()
 
-    def fetch(self, url=None, *args, **kwargs):
+    def fetch(self, url=None, download=False, *args, **kwargs):
+        if self.html and not download:
+            return
         if url is None:
             url = self.url
-        data, headers = self.agent
-        with request.urlopen(request.Request(url)) as response:
+        data, header = self.agent
+        with request.urlopen(request.Request(url, headers=header)) as response:
             self.html = response.read()
         self.parse(*args, **kwargs)
 
@@ -81,14 +88,13 @@ class Fetcher(object):
 class ParagraphFetcher(Fetcher):
     tag = "p"
 
-    def __init__(self, url):
+    def __init__(self, url, html=None, base_url=None):
         super().__init__(url)
         self.session = Session()
 
     def store_content(self, baseurl):
         for paragraph in self.content:
             new_item = Paragraph(
-                name='new person',
                 datetime=dt.now(),
                 site=self.url,
                 paragraph=paragraph,
@@ -194,46 +200,65 @@ class RobotTxt(robotparser.RobotFileParser):
 
 class Crawler(LinkFetcher):
     def __init__(self, url, fetcher=ParagraphFetcher):
-        self.robot = RobotTxt(url)
+        self.robot = RobotTxt(urllib.parse.urljoin(url, 'robots.txt'))
         self.robot.read()
+        self.links = []
         super().__init__(url)
-        try:
-            self.links += self.robot.sitemap.links
-        except AttributeError:
-            try:
-                self.links = self.robot.sitemap.links
-            except AttributeError:
-                pass
+        self.add_links(self.robot.sitemap)
         self.fetcher = fetcher
         self.content = []
         self.visited = []
 
-    def _parse_edit(self, iterator):
-        return [url for url in iterator if self._can_fetch(url)]
+    def add_links(self, link_container, depth=0):
+        try:
+            self.links += self._parse_edit(link_container.links, depth)
+        except AttributeError:
+            pass
+
+    def _parse_edit(self, iterator, base_depth=0):
+        result = []
+        increased_base_depth = base_depth + 1
+        for url in iterator:
+            if url.startswith(self.base_url):
+                depth = base_depth
+            else:
+                depth = increased_base_depth
+            if self._can_fetch(url) and depth <= CRAWL_DEPTH:
+                result.append((url, depth))
+        return result
 
     def _can_fetch(self, url):
         return self.robot.can_fetch(USER_AGENT, url)
 
     def __iter__(self):
-        self.parse()
+        print(self.links)
         while len(self.links) > 0:
-            link = self.links.pop()
-            fetcher = self.fetcher(link)
+            link, current_depth = self.links.pop()
+            if link[0] == "#":
+                continue
+            if not "http" in link:
+                link = urllib.parse.urljoin(self.url, link)
+            fetcher = self.fetcher(link, self.url)
+            urlfetcher = LinkFetcher(link, fetcher.html)
+            self.add_links(urlfetcher)
             try:
                 fetcher.store_content(link)
                 self.content.append(fetcher.content)
             except AttributeError:
+                print('error')
                 fetcher.content = None
             yield link, fetcher.content
             self.visited.append(link)
 
+
 # TODO: Check if robotparser requires direct link to robots.txt
-# TODO: add base url if this is lacking
-
-
-
+# TODO: Find out what data / is acceptable for robots.txt
+# TODO: Database functionality
+# TODO: Crawl delay functionality
 
 if __name__ == "__main__":
     python_crawler = Crawler(BASE_URL)
     for url, content in python_crawler:
         print(url, content)
+    print(python_crawler.links, python_crawler.visited)
+
