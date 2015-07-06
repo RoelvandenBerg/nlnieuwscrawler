@@ -5,6 +5,7 @@ from datetime import datetime as dt
 import urllib.parse
 import urllib.request as request
 import urllib.robotparser as robotparser
+from time import sleep
 
 from lxml import etree
 
@@ -22,7 +23,10 @@ def stringify(string):
 
 class Fetcher(object):
     """
-    Fetches site content from an [url]
+    Fetches site content from an [url] and parses its contents.
+
+    This is a base class that can be
+    overwritten. Minimally one should overwrite
     """
     tag = ""
     name = None
@@ -140,6 +144,7 @@ class RobotTxt(robotparser.RobotFileParser):
 
     def __init__(self, url):
         self.sitemap = None
+        self.craw_delay = CRAWL_DELAY
         super().__init__(url)
 
     def parse(self, lines):
@@ -196,6 +201,10 @@ class RobotTxt(robotparser.RobotFileParser):
                         self.sitemap += Sitemap(line[1])
                     else:
                         self.sitemap = Sitemap(line[1])
+                elif line[0].lower().startswith('crawl-delay'):
+                    new_delay = int(line[1])
+                    if self.crawl_delay < new_delay:
+                        self.crawl_delay = new_delay
         if state == 2:
             self._add_entry(entry)
 
@@ -240,23 +249,24 @@ class Crawler(LinkFetcher):
             if not "http" in link:
                 link = urllib.parse.urljoin(self.url, link)
             fetcher = self.fetcher(url=link, base_url=self.url)
-            fetcher.store_content()
             urlfetcher = LinkFetcher(link, fetcher.html)
             self.add_links(urlfetcher)
             try:
-
-
+                fetcher.store_content()
                 self.content.append(fetcher.content)
             except AttributeError:
                 print('error')
                 fetcher.content = None
             yield link, fetcher.content
             self.visited.append(link)
+            sleep(self.robot.sitemap.crawl_delay)
 
 
 # TODO: Check if robotparser requires direct link to robots.txt
 # TODO: Find out what data / is acceptable for as useragent info
-# TODO: Crawl delay functionality
+# TODO: Test crawl delay functionality
+# TODO: ?skip urls in database?
+# TODO: add docstrings
 
 if __name__ == "__main__":
     python_crawler = Crawler(BASE_URL)
