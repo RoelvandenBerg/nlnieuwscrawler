@@ -11,7 +11,78 @@ from lxml import etree
 
 from crawler.model import Session
 from crawler.model import Paragraph
+from crawler.model import create_all
 from crawler.settings import *
+
+
+class Head(object):
+    location = "html/head"
+    tags = {
+        "title": "title",
+        "base": "base_url",
+        "meta": (
+            ("name", {
+                "keywords": "keywords",
+                "description": "description",
+                "author": "author",
+                "revisit-after": "revisit-after",
+                "robots": "robots"
+            }),
+            ("property", {
+                "og:description": "description",
+                "og:title": "title",
+                "article:published_time": "time",
+                "article:modified_time": "time",
+                "article:expiration_time": "expiration_time",
+                "article:author": "author",
+                "article:section": "section",
+                "article:tag": "tag"
+            }),
+        )
+    }
+
+    def __init__(self, html):
+        self.root = html.find_by_xpath(self.location)
+
+    def parse(self):
+        for el in self.root:
+            self.search(el)
+
+    def search(self, element):
+        key = element.tag
+        skip_once = False
+        try:
+            result = self.tags[key]
+        except KeyError:
+            return
+        for attribute, dictionary in result:
+            try:
+                attr_value = element.get(attribute)
+                name = dictionary[attr_value]
+                value = element.get("content")
+                # if ',' in value:
+                #     value = [x.strip() for x in value.split(',')]
+                skip_once = True
+                break
+            except ValueError:
+                name = result
+                value = element.text
+        try:
+            getattr(self, name)
+            if skip_once:
+                return
+        except AttributeError:
+            pass
+        setattr(self, name, value)
+
+    # def parse_robots(self):
+    #     {
+    #         "noarchive":,
+    #         "nosnippet": ,
+    #         "noindex": ,
+    #         "nofollow": ,
+    #         "noimageindex":
+    #     })
 
 
 def stringify(string):
@@ -21,8 +92,9 @@ def stringify(string):
         return ""
 
 
-class Fetcher(object):
+class Website(object):
     """
+
     Fetches site content from an [url] and parses its contents.
 
     This is a base class that can be
@@ -33,14 +105,15 @@ class Fetcher(object):
     attr = None
     tags = None
 
-    def __init__(self, url, html=None, base_url=None):
+    def __init__(self, url, html=None, base_url=None, *args, **kwargs):
         if base_url:
             self.base_url = base_url
         else:
             self.base_url = url
         self.url = url
         self.html = html
-        self.fetch()
+        self.head = None
+        self.fetch(*args, **kwargs)
 
     def fetch(self, url=None, download=False, *args, **kwargs):
         if self.html and not download:
@@ -89,7 +162,7 @@ class Fetcher(object):
         return stringify(element.text) + "".join(children)
 
 
-class ParagraphFetcher(Fetcher):
+class WebsiteText(Website):
     tag = "p"
 
     def __init__(self, url, html=None, base_url=None):
@@ -97,9 +170,12 @@ class ParagraphFetcher(Fetcher):
         self.session = Session()
 
     def store_content(self):
+        try:
+            datetime = self.head.
         for paragraph in self.content:
             new_item = Paragraph(
-                datetime=dt.now(),
+                crawl_datetime=dt.now(),
+                datetime=datetime,
                 site=self.base_url,
                 paragraph=paragraph,
                 url=self.url
@@ -108,13 +184,14 @@ class ParagraphFetcher(Fetcher):
             self.session.commit()
 
 
-class LinkFetcher(Fetcher):
+
+class WebsiteLinks(Website):
     tag = "a"
     attr = "href"
     name = "links"
 
 
-class Sitemap(LinkFetcher):
+class Sitemap(WebsiteLinks):
     visited = []
 
     def __init__(self, url):
@@ -209,8 +286,17 @@ class RobotTxt(robotparser.RobotFileParser):
             self._add_entry(entry)
 
 
-class Crawler(LinkFetcher):
-    def __init__(self, url, fetcher=ParagraphFetcher):
+class EmptyWebsite(object):
+    """
+    Empty Website class that can serve as a dummy class for Crawler.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.content = None
+
+
+class Crawler(WebsiteLinks):
+    def __init__(self, url, fetcher=WebsiteText):
         self.robot = RobotTxt(urllib.parse.urljoin(url, 'robots.txt'))
         self.robot.read()
         self.links = []
@@ -238,8 +324,8 @@ class Crawler(LinkFetcher):
                 result.append((url, depth))
         return result
 
-    def _can_fetch(self, url):
-        return self.robot.can_fetch(USER_AGENT, url)
+    def _can_fetch(self, url_):
+        return self.robot.can_fetch(USER_AGENT, url_)
 
     def __iter__(self):
         while len(self.links) > 0:
@@ -249,14 +335,23 @@ class Crawler(LinkFetcher):
             if not "http" in link:
                 link = urllib.parse.urljoin(self.url, link)
             fetcher = self.fetcher(url=link, base_url=self.url)
-            urlfetcher = LinkFetcher(link, fetcher.html)
-            self.add_links(urlfetcher)
-            try:
-                fetcher.store_content()
-                self.content.append(fetcher.content)
-            except AttributeError:
-                print('error')
-                fetcher.content = None
+            head = Head(fetcher.html)
+            head.parse()
+            fetcher.head = head
+            head_robots = head.robots.lower()
+            if not "nofollow" in head_robots:
+                urlfetcher = WebsiteLinks(link, fetcher.html)
+                self.add_links(urlfetcher)
+            fetcher.content = None
+            if not ("noarchive" in head_robots or
+                    "nosnippet" in head_robots or
+                    "noindex" in head_robots):
+                try:
+                    fetcher.store_content()
+                    self.content.append(fetcher.content)
+                except AttributeError:
+                    print('error')
+
             yield link, fetcher.content
             self.visited.append(link)
             sleep(self.robot.sitemap.crawl_delay)
@@ -265,12 +360,14 @@ class Crawler(LinkFetcher):
 # TODO: Check if robotparser requires direct link to robots.txt
 # TODO: Find out what data / is acceptable for as useragent info
 # TODO: Test crawl delay functionality
-# TODO: ?skip urls in database?
+# TODO: ?skip urls in database? > Later
 # TODO: add docstrings
 
 if __name__ == "__main__":
     python_crawler = Crawler(BASE_URL)
+    if RESET_DATABASE:
+        create_all()
+
     for url, content in python_crawler:
         print(url, content)
     print(python_crawler.links, python_crawler.visited)
-

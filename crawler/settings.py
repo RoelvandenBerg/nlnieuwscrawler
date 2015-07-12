@@ -8,6 +8,8 @@ USER_AGENT_INFO = {
 
 BASE_URL = "https://www.nelen-schuurmans.nl/"
 CRAWL_DEPTH = 2
+CRAWL_DELAY = 1
 
 VERBOSE = False
 DATABASE_FILENAME = 'crawl.sqlite3'
+RESET_DATABASE = False

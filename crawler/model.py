@@ -18,15 +18,27 @@ class Paragraph(Base):
     __tablename__ = 'paragraphs'
 
     id = Column(Integer, primary_key=True)
-    datetime = Column(DateTime)
     site = Column(String)
+    crawl_datetime = Column(DateTime)
+    datetime = Column(DateTime)
+    title = Column(String)
+    description = Column(String)
+    author = Column(String)
+    published_time = Column(DateTime)
+    modified_time = Column(DateTime)
+    expiration_time = Column(DateTime)
+    section = Column(String)
+    tag = Column(String)
     paragraph = Column(String)
     url = Column(String)
 
     def __repr__(self):
-       return "<Title(site={}, date={})>".format(
-                            self.site, str(self.datetime))
+       return "<Title(title={}, date crawled={})>".format(
+                            self.title, str(self.datetime))
 
+
+def create_all():
+    Base.metadata.create_all(engine)
 
 if __name__ == '__main__':
-    Base.metadata.create_all(engine)
+    create_all()
