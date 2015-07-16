@@ -1,11 +1,12 @@
 __author__ = 'roelvdberg@gmail.com'
 
-import copy
 from datetime import datetime as dt
+from time import sleep
+import copy
+import re
 import urllib.parse
 import urllib.request as request
 import urllib.robotparser as robotparser
-from time import sleep
 
 from lxml import etree
 
@@ -41,8 +42,8 @@ class Head(object):
         )
     }
 
-    def __init__(self, html):
-        self.root = html.find_by_xpath(self.location)
+    def __init__(self, htmltree):
+        self.root = htmltree.xpath(self.location)
 
     def parse(self):
         for el in self.root:
@@ -112,17 +113,16 @@ class Website(object):
             self.base_url = url
         self.url = url
         self.html = html
-        self.head = None
         self.fetch(*args, **kwargs)
+        self.head = Head(self.base_tree)
 
-    def fetch(self, url=None, download=False, *args, **kwargs):
-        if self.html and not download:
-            return
-        if url is None:
-            url = self.url
-        data, header = self.agent
-        with request.urlopen(request.Request(url, headers=header)) as response:
-            self.html = response.read()
+    def fetch(self, url=None, download=True, *args, **kwargs):
+        if download and not self.html:
+            if url is None:
+                url = self.url
+            data, header = self.agent
+            with request.urlopen(request.Request(url, headers=header)) as response:
+                self.html = response.read()
         self.parse(*args, **kwargs)
 
     @property
@@ -133,7 +133,8 @@ class Website(object):
         return data, headers
 
     def parse(self, within_element=None, method="xpath"):
-        self.trees = [etree.HTML(self.html)]
+        self.base_tree = etree.HTML(self.html)
+        self.trees = [self.base_tree]
         if within_element:
             self.trees = self._fetch_by_method(within_element, method)
         parse_iterator = (self._get_attr(y) for x in self.trees
@@ -156,6 +157,8 @@ class Website(object):
             return y.attrib[self.attr]
         except TypeError:
             return self._textwalk(y)
+        except KeyError:
+            return ""
 
     def _textwalk(self, element):
         children = [self._textwalk(x) + stringify(x.tail) for x in element]
@@ -164,31 +167,45 @@ class Website(object):
 
 class WebsiteText(Website):
     tag = "p"
+    name = "text"
 
     def __init__(self, url, html=None, base_url=None):
-        super().__init__(url, html, base_url)
+        super().__init__(url, html=html, base_url=base_url)
         self.session = Session()
 
-    def store_content(self):
+    def add_existing(self, attr):
         try:
-            datetime = self.head.
-        for paragraph in self.content:
+            return self.head[attr]
+        except:
+            return None
+
+    def store_content(self):
+        text = [x for x in [txt.strip(' \t\n\r') for txt in self.text] if x != ""]
+        for paragraph in text:
             new_item = Paragraph(
                 crawl_datetime=dt.now(),
-                datetime=datetime,
-                site=self.base_url,
-                paragraph=paragraph,
-                url=self.url
+                site = self.add_existing("base_url"),
+                title = self.add_existing("title"),
+                description = self.add_existing("description"),
+                author = self.add_existing("author"),
+                published_time = self.add_existing("time"),
+                expiration_time = self.add_existing("expiration_time"),
+                section = self.add_existing("section"),
+                tag = self.add_existing("tag"),
+                paragraph = paragraph,
+                url = self.url
             )
             self.session.add(new_item)
             self.session.commit()
-
 
 
 class WebsiteLinks(Website):
     tag = "a"
     attr = "href"
     name = "links"
+
+    def _parse_edit(self, iterator):
+        return [link for link in iterator if url_validate(link)]
 
 
 class Sitemap(WebsiteLinks):
@@ -197,9 +214,6 @@ class Sitemap(WebsiteLinks):
     def __init__(self, url):
         self.url = url
         self.parse()
-
-    def _parse_edit(self, iterator):
-        return iterator
 
     def __add__(self, other):
         sum_ = copy.deepcopy(self)
@@ -221,7 +235,7 @@ class RobotTxt(robotparser.RobotFileParser):
 
     def __init__(self, url):
         self.sitemap = None
-        self.craw_delay = CRAWL_DELAY
+        self.crawl_delay = CRAWL_DELAY
         super().__init__(url)
 
     def parse(self, lines):
@@ -296,19 +310,20 @@ class EmptyWebsite(object):
 
 
 class Crawler(WebsiteLinks):
-    def __init__(self, url, fetcher=WebsiteText):
+    def __init__(self, url, website=WebsiteText):
         self.robot = RobotTxt(urllib.parse.urljoin(url, 'robots.txt'))
         self.robot.read()
         self.links = []
         super().__init__(url)
         self.add_links(self.robot.sitemap)
-        self.fetcher = fetcher
+        self.website = website
         self.content = []
         self.visited = []
 
     def add_links(self, link_container, depth=0):
         try:
-            self.links += self._parse_edit(link_container.links, depth)
+            links = self._parse_edit(link_container.links, depth)
+            self.links += links
         except AttributeError:
             pass
 
@@ -328,34 +343,60 @@ class Crawler(WebsiteLinks):
         return self.robot.can_fetch(USER_AGENT, url_)
 
     def __iter__(self):
+        i = 0
         while len(self.links) > 0:
+            i += 1
             link, current_depth = self.links.pop()
             if link[0] == "#":
                 continue
             if not "http" in link:
                 link = urllib.parse.urljoin(self.url, link)
-            fetcher = self.fetcher(url=link, base_url=self.url)
-            head = Head(fetcher.html)
-            head.parse()
-            fetcher.head = head
-            head_robots = head.robots.lower()
+            try:
+                website = self.website(url=link, base_url=self.url)
+            except urllib.error.HTTPError:
+                continue
+            try:
+                head_robots = website.head.robots.lower()
+            except AttributeError:
+                head_robots=""
             if not "nofollow" in head_robots:
-                urlfetcher = WebsiteLinks(link, fetcher.html)
+                urlfetcher = WebsiteLinks(url=link, base_url=self.url,
+                                          html=website.html, download=False)
                 self.add_links(urlfetcher)
-            fetcher.content = None
-            if not ("noarchive" in head_robots or
-                    "nosnippet" in head_robots or
-                    "noindex" in head_robots):
+            website.content = None
+            if not any(robotsetting in head_robots for robotsetting in
+                       ("noarchive", "nosnippet", "noindex")):
                 try:
-                    fetcher.store_content()
-                    self.content.append(fetcher.content)
-                except AttributeError:
-                    print('error')
+                    website.store_content()
+                    self.content.append(website.content)
+                except (TypeError, AttributeError):
+                    print('Cannot store website to database.')
 
-            yield link, fetcher.content
+            yield link, website.content
             self.visited.append(link)
-            sleep(self.robot.sitemap.crawl_delay)
+            sleep(self.robot.crawl_delay)
 
+
+url_regex = re.compile(
+    r'^(?:http|ftp)s?://'  # http:// or https://
+    r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
+    r'localhost|'  # localhost...
+    r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
+    r'(?::\d+)?'  # optional port
+    r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+
+
+def url_validate(url):
+    match = url.startswith("http") and \
+            (url[-3] == "htm" or not url[-4] == ".") \
+            and not 'twitter' in url
+    return match
+
+
+def url_validate_explicit(url):
+    match = bool(url_regex.search(url)) and (url[-3] == "htm"
+                                             or not url[-4] == ".")
+    return match
 
 # TODO: Check if robotparser requires direct link to robots.txt
 # TODO: Find out what data / is acceptable for as useragent info
@@ -369,5 +410,5 @@ if __name__ == "__main__":
         create_all()
 
     for url, content in python_crawler:
-        print(url, content)
+        print(url)
     print(python_crawler.links, python_crawler.visited)

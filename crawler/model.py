@@ -25,11 +25,10 @@ class Paragraph(Base):
     description = Column(String)
     author = Column(String)
     published_time = Column(DateTime)
-    modified_time = Column(DateTime)
     expiration_time = Column(DateTime)
     section = Column(String)
     tag = Column(String)
-    paragraph = Column(String)
+    paragraph = Column(String, nullable=False)
     url = Column(String)
 
     def __repr__(self):
