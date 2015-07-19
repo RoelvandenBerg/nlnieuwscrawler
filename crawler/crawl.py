@@ -1,12 +1,12 @@
 __author__ = 'roelvdberg@gmail.com'
 
 from datetime import datetime as dt
-from time import sleep
 import copy
 import re
 import urllib.parse
 import urllib.request as request
 import urllib.robotparser as robotparser
+import time
 
 from lxml import etree
 
@@ -17,7 +17,7 @@ from crawler.settings import *
 
 
 class Head(object):
-    location = "html/head"
+    location = "/html/head"
     tags = {
         "title": "title",
         "base": "base_url",
@@ -43,7 +43,7 @@ class Head(object):
     }
 
     def __init__(self, htmltree):
-        self.root = htmltree.xpath(self.location)
+        self.root = htmltree.xpath(self.location)[0]
 
     def parse(self):
         for el in self.root:
@@ -56,18 +56,24 @@ class Head(object):
             result = self.tags[key]
         except KeyError:
             return
-        for attribute, dictionary in result:
-            try:
+        try:
+            for attribute, dictionary in result:
                 attr_value = element.get(attribute)
-                name = dictionary[attr_value]
-                value = element.get("content")
-                # if ',' in value:
-                #     value = [x.strip() for x in value.split(',')]
-                skip_once = True
-                break
-            except ValueError:
-                name = result
-                value = element.text
+                if attr_value:
+                    try:
+                        name = dictionary[attr_value]
+                    except KeyError:
+                        continue
+                    value = element.get("content")
+                    skip_once = True
+                    break
+                    # if ',' in value:
+                    #     value = [x.strip() for x in value.split(',')]
+            if not skip_once:
+                return
+        except ValueError:
+            name = result
+            value = element.text
         try:
             getattr(self, name)
             if skip_once:
@@ -115,6 +121,7 @@ class Website(object):
         self.html = html
         self.fetch(*args, **kwargs)
         self.head = Head(self.base_tree)
+        self.head.parse()
 
     def fetch(self, url=None, download=True, *args, **kwargs):
         if download and not self.html:
@@ -175,7 +182,7 @@ class WebsiteText(Website):
 
     def add_existing(self, attr):
         try:
-            return self.head[attr]
+            return getattr(self.head, attr)
         except:
             return None
 
@@ -192,11 +199,12 @@ class WebsiteText(Website):
                 expiration_time = self.add_existing("expiration_time"),
                 section = self.add_existing("section"),
                 tag = self.add_existing("tag"),
+                keywords=self.add_existing("keywords"),
                 paragraph = paragraph,
                 url = self.url
             )
             self.session.add(new_item)
-            self.session.commit()
+        self.session.commit()
 
 
 class WebsiteLinks(Website):
@@ -345,6 +353,7 @@ class Crawler(WebsiteLinks):
     def __iter__(self):
         i = 0
         while len(self.links) > 0:
+            start_time = time.time()
             i += 1
             link, current_depth = self.links.pop()
             if link[0] == "#":
@@ -374,7 +383,8 @@ class Crawler(WebsiteLinks):
 
             yield link, website.content
             self.visited.append(link)
-            sleep(self.robot.crawl_delay)
+            while (time.time() - start_time) < self.robot.crawl_delay:
+                pass
 
 
 url_regex = re.compile(
@@ -395,7 +405,8 @@ def url_validate(url):
 
 def url_validate_explicit(url):
     match = bool(url_regex.search(url)) and (url[-3] == "htm"
-                                             or not url[-4] == ".")
+                                             or not url[-4] == ".") \
+                                        and not 'twitter' in url
     return match
 
 # TODO: Check if robotparser requires direct link to robots.txt
@@ -403,6 +414,7 @@ def url_validate_explicit(url):
 # TODO: Test crawl delay functionality
 # TODO: ?skip urls in database? > Later
 # TODO: add docstrings
+# TODO: improve by threading (for example using gevent: http://www.gevent.org/)
 
 if __name__ == "__main__":
     python_crawler = Crawler(BASE_URL)

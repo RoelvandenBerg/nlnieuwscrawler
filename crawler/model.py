@@ -28,6 +28,7 @@ class Paragraph(Base):
     expiration_time = Column(DateTime)
     section = Column(String)
     tag = Column(String)
+    keywords = Column(String)
     paragraph = Column(String, nullable=False)
     url = Column(String)
 
