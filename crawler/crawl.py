@@ -43,32 +43,40 @@ class Head(object):
     }
 
     def __init__(self, htmltree):
-        self.root = htmltree.xpath(self.location)[0]
+        try:
+            self.root = htmltree.xpath(self.location)[0]
+        except IndexError:
+            self.root = []
 
     def parse(self):
         for el in self.root:
             self.search(el)
 
+    def find_name_value(self, result, element):
+        name, value = None, None
+        skip_once = False
+        for attribute, dictionary in result:
+            attr_value = element.get(attribute)
+            if attr_value:
+                try:
+                    name = dictionary[attr_value]
+                except KeyError:
+                    continue
+                value = element.get("content")
+                skip_once = True
+                break
+                # if ',' in value:
+                #     value = [x.strip() for x in value.split(',')]
+        return name, value, skip_once
+
     def search(self, element):
         key = element.tag
-        skip_once = False
         try:
             result = self.tags[key]
         except KeyError:
             return
         try:
-            for attribute, dictionary in result:
-                attr_value = element.get(attribute)
-                if attr_value:
-                    try:
-                        name = dictionary[attr_value]
-                    except KeyError:
-                        continue
-                    value = element.get("content")
-                    skip_once = True
-                    break
-                    # if ',' in value:
-                    #     value = [x.strip() for x in value.split(',')]
+            name, value, skip_once = self.find_name_value(result, element)
             if not skip_once:
                 return
         except ValueError:
@@ -81,15 +89,6 @@ class Head(object):
         except AttributeError:
             pass
         setattr(self, name, value)
-
-    # def parse_robots(self):
-    #     {
-    #         "noarchive":,
-    #         "nosnippet": ,
-    #         "noindex": ,
-    #         "nofollow": ,
-    #         "noimageindex":
-    #     })
 
 
 def stringify(string):
@@ -111,6 +110,7 @@ class Website(object):
     name = None
     attr = None
     tags = None
+    robot_archive_options = ("noarchive", "nosnippet", "noindex")
 
     def __init__(self, url, html=None, base_url=None, *args, **kwargs):
         if base_url:
@@ -128,7 +128,8 @@ class Website(object):
             if url is None:
                 url = self.url
             data, header = self.agent
-            with request.urlopen(request.Request(url, headers=header)) as response:
+            with request.urlopen(request.Request(url, headers=header)) \
+                    as response:
                 self.html = response.read()
         self.parse(*args, **kwargs)
 
@@ -171,6 +172,22 @@ class Website(object):
         children = [self._textwalk(x) + stringify(x.tail) for x in element]
         return stringify(element.text) + "".join(children)
 
+    @property
+    def head_robots(self):
+        try:
+            return self.head.robots.lower()
+        except AttributeError:
+            return ""
+
+    @property
+    def follow(self):
+        return not "nofollow" in self.head_robots
+
+    @property
+    def archive(self):
+        return not any(robotsetting in self.head_robots for robotsetting in
+                       self.robot_archive_options)
+
 
 class WebsiteText(Website):
     tag = "p"
@@ -187,24 +204,28 @@ class WebsiteText(Website):
             return None
 
     def store_content(self):
-        text = [x for x in [txt.strip(' \t\n\r') for txt in self.text] if x != ""]
+        text = [x for x in [txt.strip(' \t\n\r')
+                            for txt in self.text] if x != ""]
+        datetimenow = dt.now()
         for paragraph in text:
             new_item = Paragraph(
-                crawl_datetime=dt.now(),
-                site = self.add_existing("base_url"),
-                title = self.add_existing("title"),
-                description = self.add_existing("description"),
-                author = self.add_existing("author"),
-                published_time = self.add_existing("time"),
-                expiration_time = self.add_existing("expiration_time"),
-                section = self.add_existing("section"),
-                tag = self.add_existing("tag"),
+                crawl_datetime=datetimenow,
+                site=self.add_existing("base_url"),
+                title=self.add_existing("title"),
+                description=self.add_existing("description"),
+                author=self.add_existing("author"),
+                published_time=self.add_existing("time"),
+                expiration_time=self.add_existing("expiration_time"),
+                section=self.add_existing("section"),
+                tag=self.add_existing("tag"),
                 keywords=self.add_existing("keywords"),
-                paragraph = paragraph,
-                url = self.url
+                paragraph=paragraph,
+                url=self.url
             )
             self.session.add(new_item)
         self.session.commit()
+        self.content = ("Total paragraphs added: {n} @{dt}."
+                        .format(n=len(text), dt=datetimenow))
 
 
 class WebsiteLinks(Website):
@@ -317,74 +338,163 @@ class EmptyWebsite(object):
         self.content = None
 
 
-class Crawler(WebsiteLinks):
-    def __init__(self, url, website=WebsiteText):
+class BaseUrl(list):
+    """
+    [BASE_URL, []n=1, []n=2, ..., []n=CRAWL_DEPTH]
+    """
+
+    def __init__(self, base):
+        super().__init__()
+        self.base = base
+        self += [[base]] + [[] for _ in range(CRAWL_DEPTH)]
+
+    def find(self, p_object, current_depth):
+        if p_object.startswith(self.base):
+            return self.base, 0
+        for i, l in enumerate(self):
+            for base in l:
+                if p_object.startswith(base):
+                    return base, i
+        new_depth = current_depth + 1
+        self.append(p_object, new_depth)
+        return p_object, new_depth
+
+    def append(self, p_object, depth):
+        if depth > CRAWL_DEPTH \
+                or p_object in self[depth] \
+                or not url_validate_explicit(p_object):
+            return False
+        self[depth].append(p_object)
+        return True
+
+    def __str__(self):
+        return self.base
+
+
+class Crawler(object):
+
+    def __init__(self, url, website=WebsiteText, base_url=None):
         self.robot = RobotTxt(urllib.parse.urljoin(url, 'robots.txt'))
         self.robot.read()
-        self.links = []
-        super().__init__(url)
-        self.add_links(self.robot.sitemap)
+        self.links = [(url, 0)]
+        self.visited = []
+        self.broken = {}
+        if base_url:
+            self.base_url = BaseUrl(base_url)
+        else:
+            self.base_url = BaseUrl(url)
+        try:
+            self.add_links(self.robot.sitemap.links)
+        except AttributeError:
+            pass
         self.website = website
         self.content = []
-        self.visited = []
 
-    def add_links(self, link_container, depth=0):
+    def add_links(self, link_container, depth=0, base_url=None):
         try:
-            links = self._parse_edit(link_container.links, depth)
+            links = self._check_links(link_container.links, depth, base_url)
             self.links += links
         except AttributeError:
             pass
 
-    def _parse_edit(self, iterator, base_depth=0):
+    def _check_links(self, urls, base_depth=0, base_url=None):
         result = []
-        increased_base_depth = base_depth + 1
-        for url in iterator:
-            if url.startswith(self.base_url):
-                depth = base_depth
-            else:
-                depth = increased_base_depth
-            if self._can_fetch(url) and depth <= CRAWL_DEPTH:
-                result.append((url, depth))
+        if not base_url:
+            base_url = self.base_url.base
+        for url_ in urls:
+            if "#" in url_:
+                url_ = url_.split('#')[0]
+                if not len(url_):
+                    continue
+            if not url_.startswith("http"):
+                url_ = urllib.parse.urljoin(base_url, url_)
+            base, depth = self.base_url.find(url_, base_depth)
+            if url_ in self.visited \
+                    or (url_, depth) in self.links \
+                    or (url_, depth) in result \
+                    or not url_validate_explicit(url_):
+                continue
+            if self._can_fetch(url_) and depth <= CRAWL_DEPTH:
+                result.append((url_, depth))
         return result
 
     def _can_fetch(self, url_):
         return self.robot.can_fetch(USER_AGENT, url_)
 
     def __iter__(self):
-        i = 0
         while len(self.links) > 0:
-            start_time = time.time()
-            i += 1
-            link, current_depth = self.links.pop()
-            if link[0] == "#":
-                continue
-            if not "http" in link:
-                link = urllib.parse.urljoin(self.url, link)
-            try:
-                website = self.website(url=link, base_url=self.url)
-            except urllib.error.HTTPError:
-                continue
-            try:
-                head_robots = website.head.robots.lower()
-            except AttributeError:
-                head_robots=""
-            if not "nofollow" in head_robots:
-                urlfetcher = WebsiteLinks(url=link, base_url=self.url,
-                                          html=website.html, download=False)
-                self.add_links(urlfetcher)
-            website.content = None
-            if not any(robotsetting in head_robots for robotsetting in
-                       ("noarchive", "nosnippet", "noindex")):
-                try:
-                    website.store_content()
-                    self.content.append(website.content)
-                except (TypeError, AttributeError):
-                    print('Cannot store website to database.')
+            yield self._iter_once()
 
-            yield link, website.content
-            self.visited.append(link)
-            while (time.time() - start_time) < self.robot.crawl_delay:
+    def _iter_once(self):
+        start_time = time.time()
+        link, current_depth = self.links.pop()
+        self.visited.append(link)
+        current_base, _ = self.base_url.find(link, current_depth)
+
+        try:
+            website = self.website(
+                url=link,
+                base_url=current_base
+            )
+        except (urllib.error.HTTPError, UnicodeEncodeError):
+            return None, None
+
+        if website.follow:
+            urlfetcher = WebsiteLinks(url=link, base_url=current_base,
+                                      html=website.html, download=False)
+            self.add_links(urlfetcher, current_depth, current_base)
+        website.content = None
+
+        if website.archive:
+            try:
+                website.store_content()
+                self.content.append(website.content)
+            except (TypeError, AttributeError):
                 pass
+        if VERBOSE:
+            print(website.content)
+
+        while (time.time() - start_time) < self.robot.crawl_delay:
+            pass
+
+        return link, website.content
+
+
+
+NOFOLLOW = [
+    "facebook",
+    "google",
+    "twitter",
+    "youtube",
+    "wikipedia",
+    "linkedin",
+    "creativecommons",
+    'sciencecommons',
+    "flickr",
+    "wikimedia",
+    "openstreetmap",
+    "instagram",
+    "github",
+    "last.fm",
+    "feedly",
+    "mozzila",
+    "opera"
+]
+
+
+def url_validate(url):
+    url = url.strip(r'/')
+    try:
+        docxtest = not (url[-1]=='x' and url[-5] == ".")
+    except IndexError:
+        docxtest = True
+    try:
+        match = (url[-3] == "htm" or not url[-4] == ".") \
+            and docxtest \
+            and not any(nofollowtxt in url for nofollowtxt in NOFOLLOW)
+    except IndexError:
+        return True
+    return match
 
 
 url_regex = re.compile(
@@ -396,31 +506,23 @@ url_regex = re.compile(
     r'(?:/?|[/?]\S+)$', re.IGNORECASE)
 
 
-def url_validate(url):
-    match = url.startswith("http") and \
-            (url[-3] == "htm" or not url[-4] == ".") \
-            and not 'twitter' in url
-    return match
-
-
 def url_validate_explicit(url):
-    match = bool(url_regex.search(url)) and (url[-3] == "htm"
-                                             or not url[-4] == ".") \
-                                        and not 'twitter' in url
+    match = bool(url_regex.search(url)) and url_validate(url)
     return match
 
 # TODO: Check if robotparser requires direct link to robots.txt
 # TODO: Find out what data / is acceptable for as useragent info
-# TODO: Test crawl delay functionality
 # TODO: ?skip urls in database? > Later
 # TODO: add docstrings
 # TODO: improve by threading (for example using gevent: http://www.gevent.org/)
 
 if __name__ == "__main__":
-    python_crawler = Crawler(BASE_URL)
+    print(BASE_URL)
+    standalone_crawler = Crawler(BASE_URL)
     if RESET_DATABASE:
         create_all()
 
-    for url, content in python_crawler:
+    for url, content in standalone_crawler:
         print(url)
-    print(python_crawler.links, python_crawler.visited)
+    print(standalone_crawler.links, standalone_crawler.visited)
+    print(list(standalone_crawler.base_url))
