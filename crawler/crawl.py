@@ -1,19 +1,50 @@
 __author__ = 'roelvdberg@gmail.com'
 
-from datetime import datetime as dt
 import copy
+from datetime import datetime as dt
+import queue
 import re
+import threading
+import time
 import urllib.parse
 import urllib.request as request
 import urllib.robotparser as robotparser
-import time
 
 from lxml import etree
+from dateutil import parser as dtparser
 
 from crawler.model import Session
 from crawler.model import Paragraph
-from crawler.model import create_all
 from crawler.settings import *
+
+
+url_regex = re.compile(
+    r'^(?:http|ftp)s?://'  # http:// or https://
+    r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
+    r'localhost|'  # localhost...
+    r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
+    r'(?::\d+)?'  # optional port
+    r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+
+
+def url_validate(url):
+    url = url.strip(r'/')
+    try:
+        docxtest = not (url[-1]=='x' and url[-5] == ".")
+    except IndexError:
+        docxtest = True
+    try:
+        match = (url[-3] == "htm" or not url[-4] == ".") \
+            and docxtest \
+            and not any(nofollowtxt in url for nofollowtxt in NOFOLLOW)
+    except IndexError:
+        return True
+    return match
+
+
+def url_validate_explicit(url):
+    match = bool(url_regex.search(url)) and url_validate(url)
+    return match
 
 
 class Head(object):
@@ -53,8 +84,6 @@ class Head(object):
             self.search(el)
 
     def find_name_value(self, result, element):
-        name, value = None, None
-        skip_once = False
         for attribute, dictionary in result:
             attr_value = element.get(attribute)
             if attr_value:
@@ -63,14 +92,12 @@ class Head(object):
                 except KeyError:
                     continue
                 value = element.get("content")
-                skip_once = True
-                break
-                # if ',' in value:
-                #     value = [x.strip() for x in value.split(',')]
-        return name, value, skip_once
+                return name, value, True
+        return None, None, False
 
     def search(self, element):
         key = element.tag
+        skip_once = False
         try:
             result = self.tags[key]
         except KeyError:
@@ -98,7 +125,7 @@ def stringify(string):
         return ""
 
 
-class Website(object):
+class Webpage(object):
     """
 
     Fetches site content from an [url] and parses its contents.
@@ -110,7 +137,9 @@ class Website(object):
     name = None
     attr = None
     tags = None
+    head = True
     robot_archive_options = ("noarchive", "nosnippet", "noindex")
+    parser = etree.HTML
 
     def __init__(self, url, html=None, base_url=None, *args, **kwargs):
         if base_url:
@@ -120,8 +149,9 @@ class Website(object):
         self.url = url
         self.html = html
         self.fetch(*args, **kwargs)
-        self.head = Head(self.base_tree)
-        self.head.parse()
+        if self.head:
+            self.head = Head(self.base_tree)
+            self.head.parse()
 
     def fetch(self, url=None, download=True, *args, **kwargs):
         if download and not self.html:
@@ -133,15 +163,8 @@ class Website(object):
                 self.html = response.read()
         self.parse(*args, **kwargs)
 
-    @property
-    def agent(self):
-        data = urllib.parse.urlencode(USER_AGENT_INFO)
-        data = data.encode('utf-8')
-        headers = {'User-Agent': USER_AGENT}
-        return data, headers
-
     def parse(self, within_element=None, method="xpath"):
-        self.base_tree = etree.HTML(self.html)
+        self.base_tree = self.parser(self.html)
         self.trees = [self.base_tree]
         if within_element:
             self.trees = self._fetch_by_method(within_element, method)
@@ -173,6 +196,13 @@ class Website(object):
         return stringify(element.text) + "".join(children)
 
     @property
+    def agent(self):
+        data = urllib.parse.urlencode(USER_AGENT_INFO)
+        data = data.encode('utf-8')
+        headers = {'User-Agent': USER_AGENT}
+        return data, headers
+
+    @property
     def head_robots(self):
         try:
             return self.head.robots.lower()
@@ -180,16 +210,16 @@ class Website(object):
             return ""
 
     @property
-    def follow(self):
+    def followable(self):
         return not "nofollow" in self.head_robots
 
     @property
-    def archive(self):
+    def archivable(self):
         return not any(robotsetting in self.head_robots for robotsetting in
                        self.robot_archive_options)
 
 
-class WebsiteText(Website):
+class WebpageText(Webpage):
     tag = "p"
     name = "text"
 
@@ -207,6 +237,8 @@ class WebsiteText(Website):
         text = [x for x in [txt.strip(' \t\n\r')
                             for txt in self.text] if x != ""]
         datetimenow = dt.now()
+        pub_timestring = self.add_existing("time")
+        published_time = dtparser.parse(pub_timestring, dayfirst=True)
         for paragraph in text:
             new_item = Paragraph(
                 crawl_datetime=datetimenow,
@@ -214,7 +246,7 @@ class WebsiteText(Website):
                 title=self.add_existing("title"),
                 description=self.add_existing("description"),
                 author=self.add_existing("author"),
-                published_time=self.add_existing("time"),
+                published_time=published_time,
                 expiration_time=self.add_existing("expiration_time"),
                 section=self.add_existing("section"),
                 tag=self.add_existing("tag"),
@@ -228,7 +260,7 @@ class WebsiteText(Website):
                         .format(n=len(text), dt=datetimenow))
 
 
-class WebsiteLinks(Website):
+class WebpageLinks(Webpage):
     tag = "a"
     attr = "href"
     name = "links"
@@ -237,11 +269,11 @@ class WebsiteLinks(Website):
         return [link for link in iterator if url_validate(link)]
 
 
-class Sitemap(WebsiteLinks):
-    visited = []
+class SitemapMixin(object):
 
-    def __init__(self, url):
-        self.url = url
+    def __init__(self, url, html=None, base_url=None):
+        super().__init__(url, html=html, base_url=base_url)
+        self.visited = []
         self.parse()
 
     def __add__(self, other):
@@ -255,6 +287,15 @@ class Sitemap(WebsiteLinks):
             if not link in self.visited:
                 yield link
                 self.visited.append(link)
+
+class HTMLSitemap(SitemapMixin, WebpageLinks):
+    pass
+
+
+class XMLSitemap(SitemapMixin, Webpage):
+    tag = "loc"
+    name = "links"
+    parser = etree.XML
 
 
 class RobotTxt(robotparser.RobotFileParser):
@@ -317,21 +358,28 @@ class RobotTxt(robotparser.RobotFileParser):
                                                                     True))
                         state = 2
                 elif line[0] == 'sitemap':
-                    if self.sitemap:
-                        self.sitemap += Sitemap(line[1])
+                    sitemap_url = line[1]
+                    if sitemap_url.endswith('.xml'):
+                        sitemap_class = XMLSitemap
                     else:
-                        self.sitemap = Sitemap(line[1])
+                        sitemap_class = HTMLSitemap
+                    if self.sitemap:
+                        print("    ADDING SITEMAP", sitemap_url)
+                        self.sitemap += sitemap_class(sitemap_url)
+                    else:
+                        print("LOADING SITEMAP", sitemap_url)
+                        self.sitemap = sitemap_class(sitemap_url)
                 elif line[0].lower().startswith('crawl-delay'):
-                    new_delay = int(line[1])
+                    new_delay = float(line[1])
                     if self.crawl_delay < new_delay:
                         self.crawl_delay = new_delay
         if state == 2:
             self._add_entry(entry)
 
 
-class EmptyWebsite(object):
+class EmptyWebpage(object):
     """
-    Empty Website class that can serve as a dummy class for Crawler.
+    Empty webpage class that can serve as a dummy class for Crawler.
     """
 
     def __init__(self, *args, **kwargs):
@@ -342,187 +390,198 @@ class BaseUrl(list):
     """
     [BASE_URL, []n=1, []n=2, ..., []n=CRAWL_DEPTH]
     """
+    base_regex = re.compile(r"^(?:http)s?://[\w\-_\.]+", re.IGNORECASE)
 
     def __init__(self, base):
         super().__init__()
-        self.base = base
-        self += [[base]] + [[] for _ in range(CRAWL_DEPTH)]
+        self += [[] for _ in range(CRAWL_DEPTH + 1)]
+        self.lock = threading.RLock()
+        self.base_queue = queue.Queue()
+        if isinstance(base, str):
+            base = [base]
+        for base_url in base:
+            self.append(base_url, 0)
 
-    def find(self, p_object, current_depth):
-        if p_object.startswith(self.base):
-            return self.base, 0
-        for i, l in enumerate(self):
-            for base in l:
-                if p_object.startswith(base):
-                    return base, i
-        new_depth = current_depth + 1
-        self.append(p_object, new_depth)
-        return p_object, new_depth
+    def add(self, p_object, current_depth):
+        with self.lock:
+            for i, l in enumerate(self):
+                for base, link_history, link_queue in l:
+                    if p_object.startswith(base):
+                        if not p_object in link_history:
+                            link_history.append(p_object)
+                            link_queue.put(p_object)
+                        return
+            current_depth += 1
+            self.append(p_object, current_depth)
 
     def append(self, p_object, depth):
-        if depth > CRAWL_DEPTH \
-                or p_object in self[depth] \
-                or not url_validate_explicit(p_object):
-            return False
-        self[depth].append(p_object)
-        return True
-
-    def __str__(self):
-        return self.base
-
-
-class Crawler(object):
-
-    def __init__(self, url, website=WebsiteText, base_url=None):
-        self.robot = RobotTxt(urllib.parse.urljoin(url, 'robots.txt'))
-        self.robot.read()
-        self.links = [(url, 0)]
-        self.visited = []
-        self.broken = {}
-        if base_url:
-            self.base_url = BaseUrl(base_url)
-        else:
-            self.base_url = BaseUrl(url)
-        try:
-            self.add_links(self.robot.sitemap.links)
-        except AttributeError:
-            pass
-        self.website = website
-        self.content = []
+        if depth > CRAWL_DEPTH:
+            return
+        with self.lock:
+            if p_object not in self[depth] or url_validate_explicit(p_object):
+                base = self.base_regex.findall(p_object)[0] + "/"
+                link_queue = queue.Queue()
+                link_queue.put(p_object)
+                historic_links = [p_object]
+                if ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE:
+                    link_queue.put(base)
+                    historic_links.append(base)
+                self[depth].append((p_object, historic_links, link_queue))
+                self.base_queue.put((base, depth, historic_links, link_queue))
 
     def add_links(self, link_container, depth=0, base_url=None):
+        if not base_url:
+            base_url = self.base
         try:
-            links = self._check_links(link_container.links, depth, base_url)
-            self.links += links
+            for url_ in link_container.links:
+                if "#" in url_:
+                    url_ = url_.split('#')[0]
+                    if not len(url_):
+                        continue
+                if not url_.startswith("http"):
+                    url_ = urllib.parse.urljoin(base_url, url_)
+                if not url_validate_explicit(url_):
+                    continue
+                self.add(url_, depth)
         except AttributeError:
             pass
 
-    def _check_links(self, urls, base_depth=0, base_url=None):
-        result = []
-        if not base_url:
-            base_url = self.base_url.base
-        for url_ in urls:
-            if "#" in url_:
-                url_ = url_.split('#')[0]
-                if not len(url_):
-                    continue
-            if not url_.startswith("http"):
-                url_ = urllib.parse.urljoin(base_url, url_)
-            base, depth = self.base_url.find(url_, base_depth)
-            if url_ in self.visited \
-                    or (url_, depth) in self.links \
-                    or (url_, depth) in result \
-                    or not url_validate_explicit(url_):
-                continue
-            if self._can_fetch(url_) and depth <= CRAWL_DEPTH:
-                result.append((url_, depth))
-        return result
+    def __str__(self):
+        return '"' + '", "'.join(self.base) + '"'
+
+    @property
+    def base(self):
+        return self[0][0][0]
+
+    @property
+    def has_content(self):
+        try:
+            return any(any(url[2].qsize() > 0 for url in urls_at_one_depth)
+                       for urls_at_one_depth in self)
+        except IndexError:
+            return False
+
+
+class Website(object):
+
+    def __init__(self, base, link_queue, historic_links, webpage=WebpageText,
+                 base_url=None, depth=0, semaphore=None):
+        self.base = base
+        self.has_content = True
+        self.robot = RobotTxt(urllib.parse.urljoin(base, 'robots.txt'))
+        self.robot.read()
+        if base_url:
+            self.base_url = base_url
+        else:
+            self.base_url = BaseUrl(base)
+            _, _, links = self.base_url.base_queue.get()
+        self.links = link_queue
+        self.depth = depth
+        try:
+            for link in self.robot.sitemap.links:
+                self.links.put(link)
+            with base_url.lock:
+                historic_links += self.robot.sitemap.links
+        except AttributeError:
+            pass
+        self.webpage = webpage
+        if semaphore:
+            self.semaphore = semaphore
+        else:
+            self.semaphore = threading.BoundedSemaphore()
 
     def _can_fetch(self, url_):
         return self.robot.can_fetch(USER_AGENT, url_)
 
-    def __iter__(self):
-        while len(self.links) > 0:
-            yield self._iter_once()
+    def run(self):
+        while self.has_content:
+            start_time = time.time()
+            with self.semaphore:
+                try:
+                    self._iter_once()
+                except queue.Empty:
+                    self.has_content = False
+            try:
+                time.sleep(
+                    self.robot.crawl_delay + start_time - time.time())
+            except ValueError:
+                pass
 
     def _iter_once(self):
-        start_time = time.time()
-        link, current_depth = self.links.pop()
-        self.visited.append(link)
-        current_base, _ = self.base_url.find(link, current_depth)
+        link = self.links.get(timeout=1)
+        if not self._can_fetch(link):
+            return  # None, None
 
         try:
-            website = self.website(
+            webpage = self.webpage(
                 url=link,
-                base_url=current_base
+                base_url=self.base
             )
         except (urllib.error.HTTPError, UnicodeEncodeError):
-            return None, None
+            return  # None, None
 
-        if website.follow:
-            urlfetcher = WebsiteLinks(url=link, base_url=current_base,
-                                      html=website.html, download=False)
-            self.add_links(urlfetcher, current_depth, current_base)
-        website.content = None
+        if webpage.followable:
+            urlfetcher = WebpageLinks(url=link, base_url=self.base,
+                                      html=webpage.html, download=False)
+            self.base_url.add_links(urlfetcher, self.depth, self.base)
+        webpage.content = None
 
-        if website.archive:
+        if webpage.archivable:
             try:
-                website.store_content()
-                self.content.append(website.content)
+                webpage.store_content()
             except (TypeError, AttributeError):
                 pass
         if VERBOSE:
-            print(website.content)
+            print(webpage.content)
 
-        while (time.time() - start_time) < self.robot.crawl_delay:
-            pass
-
-        return link, website.content
+        return  # link, webpage.content
 
 
+class Crawler(object):
 
-NOFOLLOW = [
-    "facebook",
-    "google",
-    "twitter",
-    "youtube",
-    "wikipedia",
-    "linkedin",
-    "creativecommons",
-    'sciencecommons',
-    "flickr",
-    "wikimedia",
-    "openstreetmap",
-    "instagram",
-    "github",
-    "last.fm",
-    "feedly",
-    "mozzila",
-    "opera"
-]
+    def __init__(self, sitelist):
+        self.semaphore = threading.BoundedSemaphore(MAX_THREADS)
+        self.base_url = BaseUrl(sitelist)
+        self.websites = []
 
+    def run(self, iteration=1):
+        while threading.activeCount() > 1 or self.base_url.base_queue.qsize() > 0:
+            try:
+                base = self.base_url.base_queue.get(timeout=5)
+                thread = threading.Thread(target=self._one_run, args=(base,))
+                thread.start()
+            except queue.Empty:
+                time.sleep(10)
+            print("number of threads running:", threading.activeCount())
+        if self.base_url.has_content and iteration < MAX_RUN_ITERATIONS:
+            print("Run {i} is finished, starting new run after {s} seconds."
+                  .format(i=iteration, s=RUN_WAIT_TIME))
+            time.sleep(RUN_WAIT_TIME)
+            self.run(iteration + 1)
+        print("Finished")
 
-def url_validate(url):
-    url = url.strip(r'/')
-    try:
-        docxtest = not (url[-1]=='x' and url[-5] == ".")
-    except IndexError:
-        docxtest = True
-    try:
-        match = (url[-3] == "htm" or not url[-4] == ".") \
-            and docxtest \
-            and not any(nofollowtxt in url for nofollowtxt in NOFOLLOW)
-    except IndexError:
-        return True
-    return match
-
-
-url_regex = re.compile(
-    r'^(?:http|ftp)s?://'  # http:// or https://
-    r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
-    r'localhost|'  # localhost...
-    r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
-    r'(?::\d+)?'  # optional port
-    r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+    def _one_run(self, base):
+        site, depth, historic_links, link_queue = base
+        print(site, depth)
+        self.websites.append(
+            Website(
+                base=site,
+                link_queue=link_queue,
+                historic_links=historic_links,
+                webpage=WebpageText,
+                base_url=self.base_url,
+                depth=depth,
+                semaphore=None
+            )
+        )
+        self.websites[-1].run()
 
 
-def url_validate_explicit(url):
-    match = bool(url_regex.search(url)) and url_validate(url)
-    return match
 
 # TODO: Check if robotparser requires direct link to robots.txt
-# TODO: Find out what data / is acceptable for as useragent info
 # TODO: ?skip urls in database? > Later
 # TODO: add docstrings
-# TODO: improve by threading (for example using gevent: http://www.gevent.org/)
 
 if __name__ == "__main__":
-    print(BASE_URL)
-    standalone_crawler = Crawler(BASE_URL)
-    if RESET_DATABASE:
-        create_all()
-
-    for url, content in standalone_crawler:
-        print(url)
-    print(standalone_crawler.links, standalone_crawler.visited)
-    print(list(standalone_crawler.base_url))
+    standalone_crawler = Crawler([BASE_URL])
+    standalone_crawler.run()
