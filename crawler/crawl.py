@@ -2,6 +2,7 @@ __author__ = 'roelvdberg@gmail.com'
 
 import copy
 from datetime import datetime as dt
+import logging
 import queue
 import re
 import threading
@@ -13,10 +14,16 @@ import urllib.robotparser as robotparser
 from lxml import etree
 from dateutil import parser as dtparser
 
-from crawler.model import Session
-from crawler.model import Paragraph
+import crawler.model as model
 from crawler.settings import *
 
+# setup logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(filename='crawl.log', level=logging.DEBUG)
+printlogger = logging.StreamHandler()
+printlogger.setLevel(logging.DEBUG)
+logger.addHandler(printlogger)
+logger.debug("NEW_CRAWL_RUN | " + dt.now().strftime('%H:%M | %d-%m-%Y |'))
 
 url_regex = re.compile(
     r'^(?:http|ftp)s?://'  # http:// or https://
@@ -152,6 +159,7 @@ class Webpage(object):
         if self.head:
             self.head = Head(self.base_tree)
             self.head.parse()
+        self.session = model.Session()
 
     def fetch(self, url=None, download=True, *args, **kwargs):
         if download and not self.html:
@@ -195,6 +203,53 @@ class Webpage(object):
         children = [self._textwalk(x) + stringify(x.tail) for x in element]
         return stringify(element.text) + "".join(children)
 
+    def add_existing(self, attr):
+        try:
+            return getattr(self.head, attr)
+        except:
+            return None
+
+    def store_content(self):
+        self.store_page()
+
+    def store_model(self, item):
+        self.session.add(item)
+        self.session.commit()
+
+    @property
+    def website_entry(self):
+        return self.session.query(model.Website).filter_by(
+            url=self.base_url).one()
+
+    @property
+    def webpage_entry(self):
+        return self.session.query(model.Webpage).filter_by(
+            url=self.url).one()
+
+    def store_page(self):
+        datetimenow = dt.now()
+        pub_timestring = self.add_existing("time")
+        if pub_timestring:
+            published_time = dtparser.parse(pub_timestring, dayfirst=True)
+        else:
+            published_time = None
+        head_item = model.Webpage(
+            crawl_datetime=datetimenow,
+            url=self.url,
+            title=self.add_existing("title"),
+            description=self.add_existing("description"),
+            author=self.add_existing("author"),
+            published_time=published_time,
+            expiration_time=self.add_existing("expiration_time"),
+            section=self.add_existing("section"),
+            tag=self.add_existing("tag"),
+            keywords=self.add_existing("keywords"),
+        )
+        website = self.website_entry
+        website.webpages.append(head_item)
+        self.store_model(item=website)
+        logger.debug('Webpage entry added')
+
     @property
     def agent(self):
         data = urllib.parse.urlencode(USER_AGENT_INFO)
@@ -225,39 +280,20 @@ class WebpageText(Webpage):
 
     def __init__(self, url, html=None, base_url=None):
         super().__init__(url, html=html, base_url=base_url)
-        self.session = Session()
-
-    def add_existing(self, attr):
-        try:
-            return getattr(self.head, attr)
-        except:
-            return None
 
     def store_content(self):
         text = [x for x in [txt.strip(' \t\n\r')
                             for txt in self.text] if x != ""]
-        datetimenow = dt.now()
-        pub_timestring = self.add_existing("time")
-        published_time = dtparser.parse(pub_timestring, dayfirst=True)
+        logger.debug("storing {} paragraphs".format(len(text)))
+        self.store_page()
+        webpage = self.webpage_entry
         for paragraph in text:
-            new_item = Paragraph(
-                crawl_datetime=datetimenow,
-                site=self.add_existing("base_url"),
-                title=self.add_existing("title"),
-                description=self.add_existing("description"),
-                author=self.add_existing("author"),
-                published_time=published_time,
-                expiration_time=self.add_existing("expiration_time"),
-                section=self.add_existing("section"),
-                tag=self.add_existing("tag"),
-                keywords=self.add_existing("keywords"),
+            new_item = model.Paragraph(
                 paragraph=paragraph,
-                url=self.url
             )
-            self.session.add(new_item)
-        self.session.commit()
-        self.content = ("Total paragraphs added: {n} @{dt}."
-                        .format(n=len(text), dt=datetimenow))
+            webpage.paragraphs.append(new_item)
+        self.store_model(item=webpage)
+        logger.debug('Stored webpagetext for: ' + self.url)
 
 
 class WebpageLinks(Webpage):
@@ -287,6 +323,7 @@ class SitemapMixin(object):
             if not link in self.visited:
                 yield link
                 self.visited.append(link)
+
 
 class HTMLSitemap(SitemapMixin, WebpageLinks):
     pass
@@ -364,10 +401,10 @@ class RobotTxt(robotparser.RobotFileParser):
                     else:
                         sitemap_class = HTMLSitemap
                     if self.sitemap:
-                        print("    ADDING SITEMAP", sitemap_url)
+                        logger.debug("    ADDING SITEMAP {}".format(sitemap_url))
                         self.sitemap += sitemap_class(sitemap_url)
                     else:
-                        print("LOADING SITEMAP", sitemap_url)
+                        logger.debug("LOADING SITEMAP {}".format(sitemap_url))
                         self.sitemap = sitemap_class(sitemap_url)
                 elif line[0].lower().startswith('crawl-delay'):
                     new_delay = float(line[1])
@@ -383,7 +420,7 @@ class EmptyWebpage(object):
     """
 
     def __init__(self, *args, **kwargs):
-        self.content = None
+        pass
 
 
 class BaseUrl(list):
@@ -394,6 +431,7 @@ class BaseUrl(list):
 
     def __init__(self, base):
         super().__init__()
+        self.session = model.Session()
         self += [[] for _ in range(CRAWL_DEPTH + 1)]
         self.lock = threading.RLock()
         self.base_queue = queue.Queue()
@@ -401,6 +439,12 @@ class BaseUrl(list):
             base = [base]
         for base_url in base:
             self.append(base_url, 0)
+
+    def store(self, url):
+        logger.debug('storing base "{}"'.format(url))
+        new_item = model.Website(url=url)
+        self.session.add(new_item)
+        self.session.commit()
 
     def add(self, p_object, current_depth):
         with self.lock:
@@ -428,6 +472,7 @@ class BaseUrl(list):
                     historic_links.append(base)
                 self[depth].append((p_object, historic_links, link_queue))
                 self.base_queue.put((base, depth, historic_links, link_queue))
+                self.store(base)
 
     def add_links(self, link_container, depth=0, base_url=None):
         if not base_url:
@@ -532,7 +577,7 @@ class Website(object):
             except (TypeError, AttributeError):
                 pass
         if VERBOSE:
-            print(webpage.content)
+            logger.debug(webpage.content)
 
         return  # link, webpage.content
 
@@ -545,24 +590,24 @@ class Crawler(object):
         self.websites = []
 
     def run(self, iteration=1):
-        while threading.activeCount() > 1 or self.base_url.base_queue.qsize() > 0:
+        while self.base_url.base_queue.qsize() > 0:
             try:
                 base = self.base_url.base_queue.get(timeout=5)
                 thread = threading.Thread(target=self._one_run, args=(base,))
                 thread.start()
             except queue.Empty:
                 time.sleep(10)
-            print("number of threads running:", threading.activeCount())
+            logger.debug("number of threads running: {}".format(threading.activeCount()))
         if self.base_url.has_content and iteration < MAX_RUN_ITERATIONS:
-            print("Run {i} is finished, starting new run after {s} seconds."
+            logger.debug("Run {i} is finished, starting new run after {s} seconds."
                   .format(i=iteration, s=RUN_WAIT_TIME))
             time.sleep(RUN_WAIT_TIME)
             self.run(iteration + 1)
-        print("Finished")
+        logger.debug("Finished")
 
     def _one_run(self, base):
         site, depth, historic_links, link_queue = base
-        print(site, depth)
+        logger.debug("RUN FOR {} DEPTH: {}".format(site, depth))
         self.websites.append(
             Website(
                 base=site,
@@ -578,9 +623,9 @@ class Crawler(object):
 
 
 
-# TODO: Check if robotparser requires direct link to robots.txt
 # TODO: ?skip urls in database? > Later
 # TODO: add docstrings
+# TODO: add tests
 
 if __name__ == "__main__":
     standalone_crawler = Crawler([BASE_URL])
