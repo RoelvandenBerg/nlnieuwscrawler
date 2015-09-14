@@ -1,4 +1,6 @@
 __author__ = 'roelvdberg@gmail.com'
+import os
+
 from sqlalchemy import Column
 from sqlalchemy import create_engine
 from sqlalchemy import DateTime
@@ -58,5 +60,14 @@ def create_all():
     Base.metadata.create_all(engine)
 
 
+def clear_all():
+    for filename in [DATABASE_FILENAME, LOG_FILENAME]:
+        try:
+            os.remove(filename)
+        except FileNotFoundError:
+            pass
+
+
 if __name__ == '__main__':
+    clear_all()
     create_all()

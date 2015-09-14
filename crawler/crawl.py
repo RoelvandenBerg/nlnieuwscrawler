@@ -7,6 +7,7 @@ import queue
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request as request
 import urllib.robotparser as robotparser
@@ -19,7 +20,7 @@ from crawler.settings import *
 
 # setup logger
 logger = logging.getLogger(__name__)
-logging.basicConfig(filename='crawl.log', level=logging.DEBUG)
+logging.basicConfig(filename=LOG_FILENAME, level=logging.DEBUG)
 printlogger = logging.StreamHandler()
 printlogger.setLevel(logging.DEBUG)
 logger.addHandler(printlogger)
@@ -248,7 +249,7 @@ class Webpage(object):
         website = self.website_entry
         website.webpages.append(head_item)
         self.store_model(item=website)
-        logger.debug('Webpage entry added')
+        logger.debug('Webpage entry added: {}'.format(self.url))
 
     @property
     def agent(self):
@@ -358,6 +359,7 @@ class RobotTxt(robotparser.RobotFileParser):
         state = 0
         entry = robotparser.Entry()
 
+        self.modified()
         for line in lines:
             if not line:
                 if state == 1:
@@ -413,6 +415,41 @@ class RobotTxt(robotparser.RobotFileParser):
         if state == 2:
             self._add_entry(entry)
 
+    def can_fetch(self, useragent, url):
+        """using the parsed robots.txt decide if useragent can fetch url"""
+        if self.disallow_all:
+            logger.debug('ROBOTPARSER CAN_FETCH ERROR: dissalow_all')
+            return False
+        if self.allow_all:
+            return True
+        # Until the robots.txt file has been read or found not
+        # to exist, we must assume that no url is allowable.
+        # This prevents false positives when a user erronenously
+        # calls can_fetch() before calling read().
+        if not self.last_checked:
+            logger.debug('ROBOTPARSER CAN_FETCH ERROR: last_checked')
+            return False
+        # search for given user agent matches
+        # the first match counts
+        parsed_url = urllib.parse.urlparse(urllib.parse.unquote(url))
+        url = urllib.parse.urlunparse(('', '', parsed_url.path,
+                                       parsed_url.params, parsed_url.query,
+                                       parsed_url.fragment))
+        url = urllib.parse.quote(url)
+        if not url:
+            url = "/"
+        for entry in self.entries:
+            if entry.applies_to(useragent):
+                logger.debug('ROBOTPARSER CAN_FETCH ERROR: entry.allowance(url)')
+                return entry.allowance(url)
+        # try the default entry last
+        if self.default_entry:
+            logger.debug(
+                'ROBOTPARSER CAN_FETCH ERROR: default_entry.allowance(url)')
+            return self.default_entry.allowance(url)
+        # agent not found ==> access granted
+        return True
+
 
 class EmptyWebpage(object):
     """
@@ -441,21 +478,22 @@ class BaseUrl(list):
             self.append(base_url, 0)
 
     def store(self, url):
-        logger.debug('storing base "{}"'.format(url))
         new_item = model.Website(url=url)
         self.session.add(new_item)
         self.session.commit()
 
     def add(self, p_object, current_depth):
         with self.lock:
-            for i, l in enumerate(self):
-                for base, link_history, link_queue in l:
+            for i, link_bundle in enumerate(self):
+                for base, link_history, link_queue in link_bundle:
                     if p_object.startswith(base):
                         if not p_object in link_history:
                             link_history.append(p_object)
                             link_queue.put(p_object)
                         return
             current_depth += 1
+            logger.debug(
+                'adding new base: @{}: {}'.format(current_depth, p_object))
             self.append(p_object, current_depth)
 
     def append(self, p_object, depth):
@@ -492,7 +530,10 @@ class BaseUrl(list):
             pass
 
     def __str__(self):
-        return '"' + '", "'.join(self.base) + '"'
+        return self.base
+
+    def __repr__(self):
+        return "\n".join(["\nDEPTH {}:\n".format(str(i)) + "\n".join(["    - qsize: {} - {}\n".format(base[2].qsize(), base[0]) + "\n".join(["        o {} ".format(url) for url in base[1]]) for base in layer]) for i, layer in enumerate(self)])
 
     @property
     def base(self):
@@ -510,7 +551,7 @@ class BaseUrl(list):
 class Website(object):
 
     def __init__(self, base, link_queue, historic_links, webpage=WebpageText,
-                 base_url=None, depth=0, semaphore=None):
+                 base_url=None, depth=0):
         self.base = base
         self.has_content = True
         self.robot = RobotTxt(urllib.parse.urljoin(base, 'robots.txt'))
@@ -530,10 +571,6 @@ class Website(object):
         except AttributeError:
             pass
         self.webpage = webpage
-        if semaphore:
-            self.semaphore = semaphore
-        else:
-            self.semaphore = threading.BoundedSemaphore()
 
     def _can_fetch(self, url_):
         return self.robot.can_fetch(USER_AGENT, url_)
@@ -541,11 +578,10 @@ class Website(object):
     def run(self):
         while self.has_content:
             start_time = time.time()
-            with self.semaphore:
-                try:
-                    self._iter_once()
-                except queue.Empty:
-                    self.has_content = False
+            try:
+                self._iter_once()
+            except queue.Empty:
+                self.has_content = False
             try:
                 time.sleep(
                     self.robot.crawl_delay + start_time - time.time())
@@ -553,33 +589,37 @@ class Website(object):
                 pass
 
     def _iter_once(self):
+        logger.debug('self.iter_once: {url}'.format(url=str(self.base)))
         link = self.links.get(timeout=1)
         if not self._can_fetch(link):
-            return  # None, None
-
+            logger.debug('{} CANNOT BE FETCHED.'.format(link))
+            return
         try:
             webpage = self.webpage(
                 url=link,
                 base_url=self.base
             )
         except (urllib.error.HTTPError, UnicodeEncodeError):
-            return  # None, None
-
+            logger.debug('HTTPERROR: {}'.format(link))
+            return
         if webpage.followable:
             urlfetcher = WebpageLinks(url=link, base_url=self.base,
                                       html=webpage.html, download=False)
             self.base_url.add_links(urlfetcher, self.depth, self.base)
+        else:
+            logger.debug('WEBSITE NOT FOLLOWABLE: {}'.format(link))
         webpage.content = None
 
         if webpage.archivable:
             try:
                 webpage.store_content()
             except (TypeError, AttributeError):
-                pass
+                logger.debug('STORE CONTENT NOT WORKING FOR SITE: {}'.format(link))
+        else:
+            logger.warn('WEBSITE NOT ARCHIVABLE: {}'.format(link))
         if VERBOSE:
             logger.debug(webpage.content)
-
-        return  # link, webpage.content
+        return
 
 
 class Crawler(object):
@@ -589,38 +629,43 @@ class Crawler(object):
         self.base_url = BaseUrl(sitelist)
         self.websites = []
 
-    def run(self, iteration=1):
-        while self.base_url.base_queue.qsize() > 0:
+    def run(self):
+        number_of_threads = 2
+        while number_of_threads > 1: # self.base_url.base_queue.qsize() > 0:
             try:
                 base = self.base_url.base_queue.get(timeout=5)
-                thread = threading.Thread(target=self._one_run, args=(base,))
+                thread = threading.Thread(
+                    target=self._one_run,
+                    args=(base, )
+                )
                 thread.start()
             except queue.Empty:
-                time.sleep(10)
-            logger.debug("number of threads running: {}".format(threading.activeCount()))
-        if self.base_url.has_content and iteration < MAX_RUN_ITERATIONS:
-            logger.debug("Run {i} is finished, starting new run after {s} seconds."
-                  .format(i=iteration, s=RUN_WAIT_TIME))
-            time.sleep(RUN_WAIT_TIME)
-            self.run(iteration + 1)
+                pass
+            number_of_threads = threading.activeCount()
+            logger.debug("number of threads running: {}".format(number_of_threads))
         logger.debug("Finished")
+        logger.debug(repr(self.base_url))
 
     def _one_run(self, base):
-        site, depth, historic_links, link_queue = base
-        logger.debug("RUN FOR {} DEPTH: {}".format(site, depth))
-        self.websites.append(
-            Website(
-                base=site,
-                link_queue=link_queue,
-                historic_links=historic_links,
-                webpage=WebpageText,
-                base_url=self.base_url,
-                depth=depth,
-                semaphore=None
-            )
-        )
-        self.websites[-1].run()
-
+        with self.semaphore:
+            site, depth, historic_links, link_queue = base
+            logger.debug("RUN FOR {} DEPTH: {}".format(site, depth))
+            lock = threading.Lock()
+            with lock:
+                website = Website(
+                    base=site,
+                    link_queue=link_queue,
+                    historic_links=historic_links,
+                    webpage=WebpageText,
+                    base_url=self.base_url,
+                    depth=depth,
+                )
+            with lock:
+                self.websites.append(
+                    website
+                )
+            with lock:
+                self.websites[-1].run()
 
 
 # TODO: ?skip urls in database? > Later
