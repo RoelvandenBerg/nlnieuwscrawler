@@ -1,13 +1,12 @@
-USER_AGENT = 'Python3'
-USER_AGENT_INFO = {
-          'name' : 'Nieuws crawler',
-          'organisation': '-',
-          'location' : 'Unknown',
-          'language' : 'Python 3'
-}
+from crawler.settings import *
 
-VERBOSE = True
-DATABASE_FILENAME = 'crawl.sqlite3'
+ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE = False
+CRAWL_DEPTH = 0
+CRAWL_DELAY = 1
+RUN_WAIT_TIME = 300
+MAX_RUN_ITERATIONS = 0
+MAX_THREADS = 30
+DATABASE_FILENAME = 'nlnieuws.sqlite3'
 
 try:
     from local import *

@@ -493,7 +493,7 @@ class BaseUrl(list):
                         return
             current_depth += 1
             logger.debug(
-                'adding new base: @{}: {}'.format(current_depth, p_object))
+                'adding new site @depth {} : {}'.format(current_depth, p_object))
             self.append(p_object, current_depth)
 
     def append(self, p_object, depth):
@@ -619,58 +619,47 @@ class Website(object):
             logger.warn('WEBSITE NOT ARCHIVABLE: {}'.format(link))
         if VERBOSE:
             logger.debug(webpage.content)
-        return
 
 
 class Crawler(object):
 
     def __init__(self, sitelist):
-        self.semaphore = threading.BoundedSemaphore(MAX_THREADS)
         self.base_url = BaseUrl(sitelist)
         self.websites = []
 
     def run(self):
-        number_of_threads = 2
-        while number_of_threads > 1: # self.base_url.base_queue.qsize() > 0:
-            try:
-                base = self.base_url.base_queue.get(timeout=5)
-                thread = threading.Thread(
-                    target=self._one_run,
-                    args=(base, )
-                )
-                thread.start()
-            except queue.Empty:
-                pass
-            number_of_threads = threading.activeCount()
-            logger.debug("number of threads running: {}".format(number_of_threads))
+        number_of_website_threads = 2
+        while number_of_website_threads > 1:
+            number_of_website_threads = threading.activeCount() - 1
+            while threading.active_count() <= MAX_THREADS:
+                try:
+                    base = self.base_url.base_queue.get(timeout=5)
+                    thread = threading.Thread(
+                        target=self._one_run,
+                        args=(base, )
+                    )
+                    thread.start()
+                except queue.Empty:
+                    pass
+                logger.debug("Number of threads with websites running: {}".format(number_of_website_threads))
         logger.debug("Finished")
         logger.debug(repr(self.base_url))
 
     def _one_run(self, base):
-        with self.semaphore:
-            site, depth, historic_links, link_queue = base
-            logger.debug("RUN FOR {} DEPTH: {}".format(site, depth))
-            lock = threading.Lock()
-            with lock:
-                website = Website(
-                    base=site,
-                    link_queue=link_queue,
-                    historic_links=historic_links,
-                    webpage=WebpageText,
-                    base_url=self.base_url,
-                    depth=depth,
-                )
-            with lock:
-                self.websites.append(
-                    website
-                )
-            with lock:
-                self.websites[-1].run()
+        # with self.semaphore:
+        site, depth, historic_links, link_queue = base
+        logger.debug("RUN FOR {} DEPTH: {}".format(site, depth))
+        website = Website(
+            base=site,
+            link_queue=link_queue,
+            historic_links=historic_links,
+            webpage=WebpageText,
+            base_url=self.base_url,
+            depth=depth,
+        )
+        self.websites.append(website)
+        self.websites[-1].run()
 
-
-# TODO: ?skip urls in database? > Later
-# TODO: add docstrings
-# TODO: add tests
 
 if __name__ == "__main__":
     standalone_crawler = Crawler([BASE_URL])

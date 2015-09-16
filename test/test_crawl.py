@@ -2,14 +2,14 @@ __author__ = 'roelvdberg@gmail.com'
 
 import unittest
 
-from crawler.crawl import Fetcher
-from crawler.crawl import Crawler
+from crawler.crawl import Webpage
+from crawler.crawl import Website
 
 
 TEST_URL = 'http://python.org/'
 
 class TestBaseFetcher(unittest.TestCase):
-    fetcher = Fetcher(TEST_URL)
+    fetcher = Webpage(TEST_URL)
 
     def test_crawl(self):
         self.assertRaises(NotImplementedError, self.fetcher.fetch)
@@ -21,7 +21,7 @@ class TestBaseFetcher(unittest.TestCase):
         self.assertTrue('User-Agent' in agent[1].keys())
         self.assertIsInstance(agent[0], bytes)
 
-class TestCrawler(Crawler):
+class TestWebsite(Website):
 
     def test_parse(self):
         pass
