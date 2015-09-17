@@ -2,6 +2,7 @@ __author__ = 'roelvdberg@gmail.com'
 
 import copy
 from datetime import datetime as dt
+from gzip import GzipFile
 import logging
 import queue
 import re
@@ -11,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request as request
 import urllib.robotparser as robotparser
+from zipfile import ZipFile
 
 from lxml import etree
 from dateutil import parser as dtparser
@@ -26,6 +28,8 @@ printlogger.setLevel(logging.DEBUG)
 logger.addHandler(printlogger)
 logger.debug("NEW_CRAWL_RUN | " + dt.now().strftime('%H:%M | %d-%m-%Y |'))
 
+
+# Regex taken from Django:
 url_regex = re.compile(
     r'^(?:http|ftp)s?://'  # http:// or https://
     r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
@@ -36,13 +40,23 @@ url_regex = re.compile(
 
 
 def url_validate(url):
+    """
+    Validate urls based on simple rules.
+    - check for ms office types like .docx format
+    - if the url has a three-letter-extension this should be htm, com, org, edu
+      or gov
+
+    :param url: url to check
+    :return: True if url is valid
+    """
+    url_extensions = ["htm", "com", "org", "edu", "gov"]
     url = url.strip(r'/')
     try:
         docxtest = not (url[-1]=='x' and url[-5] == ".")
     except IndexError:
         docxtest = True
     try:
-        match = (url[-3] == "htm" or not url[-4] == ".") \
+        match = (url[-3] in url_extensions or not url[-4] == ".") \
             and docxtest \
             and not any(nofollowtxt in url for nofollowtxt in NOFOLLOW)
     except IndexError:
@@ -51,11 +65,26 @@ def url_validate(url):
 
 
 def url_validate_explicit(url):
+    """
+    Validate url based on regex and simple rules from url_validate.
+
+    See url_validate and url_regex for the chosen rules.
+
+    :param url: url to check
+    :return: True if url is valid
+    """
     match = bool(url_regex.search(url)) and url_validate(url)
     return match
 
 
 class Head(object):
+    """
+    Contains head tags and values for a webpage after parse()
+
+    :param tags: contains a dictionary of {tag: attribute name} and/or [attribute:] attribute name
+                 where attribute name is the name of the attribute in Head the
+                 found value is stored to.
+    """
     location = "/html/head"
     tags = {
         "title": "title",
@@ -319,9 +348,16 @@ class SitemapMixin(object):
         sum_.links += other.links
         return sum_
 
+    def __iadd__(self, other):
+        return self.__add__(other)
+
     def __iter__(self):
         for link in self.links:
-            if not link in self.visited:
+            if link[-3] == "xml":
+                higher_sitemap = XMLSitemap(link)
+                self += higher_sitemap
+                self.visited.append(link)
+            elif link not in self.visited:
                 yield link
                 self.visited.append(link)
 
@@ -334,6 +370,39 @@ class XMLSitemap(SitemapMixin, Webpage):
     tag = "loc"
     name = "links"
     parser = etree.XML
+
+
+class ZipSitemap(XMLSitemap):
+    zip_method = ZipFile
+
+    def extract_zip(self, input_zip):
+        """
+        Extract zipfile with multiple files to memory.
+
+        Direct copy of the anwer by mata on stack overflow:
+        http://stackoverflow.com/users/1350899/mata
+        http://stackoverflow.com/questions/10908877/extracting-a-zipfile-to-memory/#answer-10909016
+        """
+        zip_file = self.zip_method(input_zip)
+        return {name: zip_file.read(name) for name in zip_file.namelist()}
+
+    def fetch(self, url=None, download=None, *args, **kwargs):
+        if url is None:
+            url = self.url
+        data, header = self.agent
+        with request.urlopen(request.Request(url, headers=header)) \
+                as response:
+            zipped = response.read()
+            unzipped_xmls = self.extract_zip(zipped)
+        self.old = ZipSitemap("")
+        for key in unzipped_xmls.keys():
+            self.html = unzipped_xmls[key]
+            self_old = copy.deepcopy(self)
+            self.parse(*args, **kwargs)
+            self += self_old
+
+class GunZipSitemap(ZipSitemap):
+    zip_method = GzipFile
 
 
 class RobotTxt(robotparser.RobotFileParser):
@@ -400,6 +469,12 @@ class RobotTxt(robotparser.RobotFileParser):
                     sitemap_url = line[1]
                     if sitemap_url.endswith('.xml'):
                         sitemap_class = XMLSitemap
+                    elif sitemap_url.endswith('.zip'):
+                        sitemap_class = ZipSitemap
+                    elif sitemap_url.endswith('.gz'):
+                        sitemap_class = GunZipSitemap
+                    elif sitemap_url.endswith('/sitemapindex/'):
+                        sitemap_class = SitemapIndex
                     else:
                         sitemap_class = HTMLSitemap
                     if self.sitemap:
