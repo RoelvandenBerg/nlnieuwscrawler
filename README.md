@@ -1,21 +1,18 @@
 # nlnieuwscrawler
 crawler that harvests Dutch news
 
-#### TODOLIST WITH SMALL CHANGES:
-* TODO: Deal with urls in database > If database contains url set re-crawl after REVISIT_TIME
-* TODO: Add docstrings
-* TODO: Update Readme
+Currently in Alpha Version.
 
-#### TODOLIST WITH LARGE CHANGES:
-* TODO: SiteMap should be able to use zipped sitemaps and multiple sitemaps / sitemap indices
-* TODO: Test Sitemaps
-* TODO: Add tests
-* TODO: Improve metadata with search in body text (mainly datetime info)
+### WORK IN PROGRESS:
+#### TODOLIST:
 * TODO: Include text sources other than `<p>`, also `<li>` and `<h..>` elements. Include latter in search.
-* TODO: Add geolocation
+* TODO: Improve metadata with search in body text (mainly datetime info)
 
-#### LONG TERM WISHLIST:
-* TODO: Harvest contextual data (abbreveations, etc.)
-* TODO: Improve logging
+#### WISHLIST:
+* Update Readme
+* Harvest contextual data (abbreveations, etc.)
+* Add tests
+* Improve logging
+* Deal with urls in database > If database contains url set re-crawl after REVISIT_TIME
+* Add geolocation
 
-### WORK IN PROGRESS
