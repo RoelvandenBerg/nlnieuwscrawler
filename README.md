@@ -12,7 +12,6 @@ Currently in Alpha Version.
 * Update Readme
 * Harvest contextual data (abbreveations, etc.)
 * Add tests
-* Improve logging
 * Deal with urls in database > If database contains url set re-crawl after REVISIT_TIME
 * Add geolocation
 
