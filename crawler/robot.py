@@ -93,13 +93,18 @@ class Txt(robotparser.RobotFileParser):
                         sitemap_class = sitemap.Html
                     else:
                         sitemap_class = sitemap.Html
-                    if self.sitemap:
+                    try:
+                        if self.sitemap:
+                            logger.debug(
+                                "SITEMAP: added {}".format(sitemap_url))
+                            self.sitemap += sitemap_class(sitemap_url)
+                        else:
+                            logger.debug(
+                                "SITEMAP: loading {}".format(sitemap_url))
+                            self.sitemap = sitemap_class(sitemap_url)
+                    except AttributeError:
                         logger.debug(
-                            "SITEMAP: added {}".format(sitemap_url))
-                        self.sitemap += sitemap_class(sitemap_url)
-                    else:
-                        logger.debug("SITEMAP: loading {}".format(sitemap_url))
-                        self.sitemap = sitemap_class(sitemap_url)
+                            "SITEMAP: LOADING FAILED {}".format(sitemap_url))
                 elif line[0].lower().startswith('crawl-delay'):
                     new_delay = float(line[1])
                     if self.crawl_delay < new_delay:

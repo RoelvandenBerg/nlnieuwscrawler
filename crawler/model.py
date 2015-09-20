@@ -32,6 +32,7 @@ class Webpage(Base):
     id = Column(Integer, primary_key=True)
     website_id = Column(Integer, ForeignKey('websites.id'))
     paragraphs = relationship("Paragraph", backref='webpages')
+    headings = relationship("Heading", backref='webpages')
     url = Column(String)
     crawl_datetime = Column(DateTime)
     datetime = Column(DateTime)
@@ -53,7 +54,21 @@ class Paragraph(Base):
     __tablename__ = 'paragraphs'
     id = Column(Integer, primary_key=True)
     webpage_id = Column(Integer, ForeignKey('webpages.id'))
+    headings_id = Column(Integer, ForeignKey('headings.id'))
     paragraph = Column(String, nullable=False)
+
+
+class Heading(Base):
+    __tablename__ = 'headings'
+    id = Column(Integer, primary_key=True)
+    webpage_id = Column(Integer, ForeignKey('webpages.id'))
+    paragraphs = relationship("Paragraph", backref='headings')
+    h1 = Column(String)
+    h2 = Column(String)
+    h3 = Column(String)
+    h4 = Column(String)
+    h5 = Column(String)
+    h6 = Column(String)
 
 
 def create_all():

@@ -76,6 +76,7 @@ class Head(object):
             self.root = htmltree.xpath(self.location)[0]
         except IndexError:
             self.root = []
+        self.html = htmltree
 
     def parse(self):
         """
@@ -83,6 +84,16 @@ class Head(object):
         """
         for el in self.root:
             self.search(el)
+        if not 'time' in self.__dir__():
+            try:
+                self.time = self.html.xpath(r'.//time')[0]
+            except IndexError:
+                try:
+                    logger.debug(
+                        'head {} does not have time'.format(self.title))
+                except AttributeError:
+                    logger.debug('head object does not have time')
+
 
     def find_name_value(self, tag_name_pair, element):
         """
@@ -149,6 +160,8 @@ class Webpage(object):
         as a name.
     :param attr: sought attribute(s) can be a list of strings or a string. The
         chosen form must correspond with self.tag.
+    :param split_content: if True saves content as attributes to self else
+        content is only stored as 'content'.
     :param head: if True is given a metadata from the head will be stored in
         this attribute.
     :param robot_archive_options: website will not be archived if any of these
@@ -159,6 +172,8 @@ class Webpage(object):
     tag = ""
     name = None
     attr = None
+    split_content = True
+    one_tag = False
     head = True
     robot_archive_options = ("noarchive", "nosnippet", "noindex")
     parser = etree.HTML
@@ -181,6 +196,12 @@ class Webpage(object):
             self.tag = [self.tag]
             self.name = [self.name]
             self.attr = [self.attr]
+            self.one_tag = True
+        self.name = {self.tag[i]: name for i, name in enumerate(self.name)}
+        try:
+            self.attr = {self.tag[i]: attr for i, attr in enumerate(self.attr)}
+        except TypeError:
+            self.attr = None
         if base_url:
             self.base_url = base_url
         else:
@@ -219,8 +240,6 @@ class Webpage(object):
         """
         Parse html from self.html and store the retrieved content.
 
-        Stores the tag that is sought from self.tag under the given name
-        (self.name see class description of self.name for alternative naming).
         If selector parameters are given, parsing is handled in two steps.
         - First only relevant elements are selected from the parsed tree.
         - Last the resulting elements are parsed for tags and attributes.
@@ -230,22 +249,35 @@ class Webpage(object):
         :param selector_string: for example ".//a" for a hyperlink.
         :param selector_method_name: either 'xpath' or 'cssselect'
         """
-        for i, tag in enumerate(self.tag):
-            self.base_tree = self.parser(self.html)
-            self.trees = [self.base_tree]
-            if selector_string:
-                self.trees = self._fetch_by_method(
-                    selector_string, selector_method_name)
-            parse_iterator = (self._get_attr(y, i) for x in self.trees
-                              for y in x.iter(tag))
-            content = self.parse_edit(parse_iterator)
+        self.base_tree = self.parser(self.html)
+        self.trees = [self.base_tree]
+        if selector_string:
+            self.trees = self._fetch_by_method(
+                selector_string, selector_method_name)
+        parse_iterator = ((self._get_attr(y), y.tag) for x in self.trees
+                          for y in x.iter() if y.tag in self.tag)
+        self.content = self.parse_edit(parse_iterator)
+        if self.one_tag:
+            tag = self.tag[0]
+            content = [x[0] for x in self.content]
+            self._set_content(tag, content)
+        elif self.split_content:
+            for tag in self.tag:
+                content = [x[0] for x in self.content if x[1] == tag]
+                self._set_content(tag, content)
+
+    def _set_content(self, tag, content):
+        """
+        Stores the tag content under the given name (self.name; see class
+        description of self.name for alternative naming).
+        """
+        try:
+            setattr(self, self.name[tag], content)
+        except (TypeError, IndexError):
             try:
-                setattr(self, self.name[i], content)
+                setattr(self, self.attr[tag], content)
             except (TypeError, IndexError):
-                try:
-                    setattr(self, self.attr[i], content)
-                except (TypeError, IndexError):
-                    setattr(self, tag, content)
+                setattr(self, tag, content)
 
     def parse_edit(self, iterator):
         """
@@ -272,7 +304,7 @@ class Webpage(object):
         """
         return self.trees[0][selector_method_name](selector_string)
 
-    def _get_attr(self, element, index):
+    def _get_attr(self, element):
         """
         Try to get attribute value or text from element.
 
@@ -283,7 +315,7 @@ class Webpage(object):
         :return: Returns attribute value or all underlying text of an element.
         """
         try:
-            return element.attrib[self.attr[index]]
+            return element.attrib[self.attr[element.tag]]
         except TypeError:
             return self._textwalk(element)
         except KeyError:
@@ -423,9 +455,6 @@ class Text(Webpage):
     tag = "p"
     name = "text"
 
-    def __init__(self, url, html=None, base_url=None):
-        super().__init__(url, html=html, base_url=base_url)
-
     def store(self):
         """
         Stores paragraphs and header metadata to database.
@@ -444,6 +473,53 @@ class Text(Webpage):
         logger.debug('Stored webpagetext for: ' + self.url)
 
 
+class HeadingText(Webpage):
+    paragraph_tags = ['p', 'li']
+    heading_tags = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']
+    tag = ['p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']
+    name = [None] * 6
+    split_content = False
+
+    def store(self):
+        """
+        Stores paragraphs, headings and header metadata to database.
+        """
+        logger.debug(self.url)
+        logger.debug(
+            "storing {} paragraphs and headings".format(len(self.content)))
+        self.store_page()
+        previous_headings = {h: None for h in self.heading_tags}
+        webpage = self.webpage_entry
+        first_heading = True
+        heading = None
+        for item, tag in self.content:
+            item = item.strip(' \t\n\r')
+            if item == "":
+                continue
+            if tag in self.paragraph_tags and not first_heading:
+                new_paragraph = model.Paragraph(
+                    paragraph=item,
+                )
+                heading.paragraphs.append(new_paragraph)
+                webpage.paragraphs.append(new_paragraph)
+            else:
+                if not first_heading:
+                    webpage.headings.append(heading)
+                else:
+                    first_heading = False
+                previous_headings[tag] = item
+                heading = model.Heading(
+                    h1=previous_headings['h1'],
+                    h2=previous_headings['h2'],
+                    h3=previous_headings['h3'],
+                    h4=previous_headings['h4'],
+                    h5=previous_headings['h5'],
+                    h6=previous_headings['h6'],
+                )
+        self.store_model(item=webpage)
+        logger.debug('Stored paragraphs and headings for: ' + self.url)
+
+
 class Links(Webpage):
     """
     Fetches content from webpage by url and returns its hyperlinks.
@@ -459,8 +535,5 @@ class Links(Webpage):
         :param iterator: list of urls to validate
         :return: list of valid urls
         """
-        return [link for link in iterator if validate.url(link)]
-
-
-class HeadingText(Text):
-    pass
+        iterator = list(iterator)
+        return [link for link in iterator if validate.url(link[0])]

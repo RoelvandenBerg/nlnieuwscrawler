@@ -269,8 +269,6 @@ class Website(object):
             self.base_url.add_links(urlfetcher, self.depth, self.base)
         else:
             logger.debug('WEBSITE: webpage not followable: {}'.format(link))
-        page.content = None
-
         if page.archivable:
             try:
                 page.store()
@@ -343,5 +341,5 @@ class Crawler(object):
 
 
 if __name__ == "__main__":
-    standalone_crawler = Crawler([BASE_URL], webpage.Text)
+    standalone_crawler = Crawler([BASE_URL], webpage.HeadingText)
     standalone_crawler.run()
