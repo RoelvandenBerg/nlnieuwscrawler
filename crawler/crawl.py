@@ -341,5 +341,5 @@ class Crawler(object):
 
 
 if __name__ == "__main__":
-    standalone_crawler = Crawler([BASE_URL], webpage.HeadingText)
+    standalone_crawler = Crawler(SITES, webpage.HeadingText)
     standalone_crawler.run()

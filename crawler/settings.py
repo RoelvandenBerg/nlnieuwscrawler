@@ -6,7 +6,21 @@ USER_AGENT_INFO = {
           'language' : 'Python 3'
 }
 
-BASE_URL = "https://www.nelen-schuurmans.nl/"
+SITES = [
+    'http://www.112noordholland.nl',
+    'http://www.noordhollandsdagblad.nl',
+    'http://www.denoordoostpolder.nl',
+    'http://www.omroepbrabant.nl',
+    'http://www.omroepflevoland.nl',
+    'http://www.omroepgelderland.nl',
+    'http://www.omroepwest.nl',
+    'http://www.omroepzeeland.nl',
+    'http://www.rtvdrenthe.nl',
+    'http://www.rtvnh.nl',
+    'http://www.rtvoost.nl',
+    'http://www.rtvutrecht.nl'
+]
+
 ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE = False
 CRAWL_DEPTH = 0
 CRAWL_DELAY = 5
@@ -15,8 +29,8 @@ MAX_RUN_ITERATIONS = 1
 MAX_THREADS = 30
 
 VERBOSE = False
-DATABASE_FILENAME = 'crawl.sqlite3'
-LOG_FILENAME = 'crawl.log'
+DATABASE_FILENAME = '/media/usb/nieuwscrawltest.sqlite3'
+LOG_FILENAME = '/media/usb/nieuwscrawltest.log'
 RESET_DATABASE = False
 
 NOFOLLOW = [
@@ -39,5 +53,5 @@ NOFOLLOW = [
     "wikipedia",
     "wiley",
     "youtube",
-    'sciencecommons',
+    'sciencecommons'
 ]
