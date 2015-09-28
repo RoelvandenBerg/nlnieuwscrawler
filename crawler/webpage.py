@@ -9,9 +9,9 @@ import urllib.request as request
 
 from lxml import etree
 
-from crawler import model as model
-from crawler.settings import USER_AGENT_INFO, USER_AGENT, LOG_FILENAME
-import crawler.validate as validate
+import model
+from settings import USER_AGENT_INFO, USER_AGENT, LOG_FILENAME
+import validate
 
 # setup logger
 logger = logging.getLogger(__name__)

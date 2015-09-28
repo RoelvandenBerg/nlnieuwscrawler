@@ -5,8 +5,8 @@ import logging
 import urllib.parse
 import urllib.robotparser as robotparser
 
-from crawler.settings import CRAWL_DELAY
-import crawler.sitemap as sitemap
+from settings import CRAWL_DELAY
+import sitemap
 
 
 # setup logger
@@ -102,7 +102,7 @@ class Txt(robotparser.RobotFileParser):
                             logger.debug(
                                 "SITEMAP: loading {}".format(sitemap_url))
                             self.sitemap = sitemap_class(sitemap_url)
-                    except AttributeError:
+                    except (AttributeError, TypeError):
                         logger.debug(
                             "SITEMAP: LOADING FAILED {}".format(sitemap_url))
                 elif line[0].lower().startswith('crawl-delay'):
