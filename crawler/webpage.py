@@ -389,28 +389,29 @@ class Webpage(object):
         """
         Store parsed webpage to database.
         """
-        datetimenow = dt.now()
-        pub_timestring = self.find_in_head("time")
-        if pub_timestring:
-            published_time = dtparser.parse(pub_timestring, dayfirst=True)
-        else:
-            published_time = None
-        head_item = model.Webpage(
-            crawl_datetime=datetimenow,
-            url=self.url,
-            title=self.find_in_head("title"),
-            description=self.find_in_head("description"),
-            author=self.find_in_head("author"),
-            published_time=published_time,
-            expiration_time=self.find_in_head("expiration_time"),
-            section=self.find_in_head("section"),
-            tag=self.find_in_head("tag"),
-            keywords=self.find_in_head("keywords"),
-        )
-        website = self.website_entry
-        website.webpages.append(head_item)
-        self.store_model(item=website)
-        logger.debug('Webpage entry added: {}'.format(self.url))
+        with self.database_lock:
+            datetimenow = dt.now()
+            pub_timestring = self.find_in_head("time")
+            if pub_timestring:
+                published_time = dtparser.parse(pub_timestring, dayfirst=True)
+            else:
+                published_time = None
+            head_item = model.Webpage(
+                crawl_datetime=datetimenow,
+                url=self.url,
+                title=self.find_in_head("title"),
+                description=self.find_in_head("description"),
+                author=self.find_in_head("author"),
+                published_time=published_time,
+                expiration_time=self.find_in_head("expiration_time"),
+                section=self.find_in_head("section"),
+                tag=self.find_in_head("tag"),
+                keywords=self.find_in_head("keywords"),
+            )
+            website = self.website_entry
+            website.webpages.append(head_item)
+            self.store_model(item=website)
+            logger.debug('Webpage entry added: {}'.format(self.url))
 
     @property
     def agent(self):
@@ -470,18 +471,19 @@ class Text(Webpage):
         """
         Stores paragraphs and header metadata to database.
         """
-        text = [x for x in [txt.strip(' \t\n\r')
-                            for txt in self.text] if x != ""]
-        logger.debug("storing {} paragraphs".format(len(text)))
-        self.store_page()
-        webpage = self.webpage_entry
-        for paragraph in text:
-            new_item = model.Paragraph(
-                paragraph=paragraph,
-            )
-            webpage.paragraphs.append(new_item)
-        self.store_model(item=webpage)
-        logger.debug('Stored webpagetext for: ' + self.url)
+        with self.database_lock:
+            text = [x for x in [txt.strip(' \t\n\r')
+                                for txt in self.text] if x != ""]
+            logger.debug("storing {} paragraphs".format(len(text)))
+            self.store_page()
+            webpage = self.webpage_entry
+            for paragraph in text:
+                new_item = model.Paragraph(
+                    paragraph=paragraph,
+                )
+                webpage.paragraphs.append(new_item)
+            self.store_model(item=webpage)
+            logger.debug('Stored webpagetext for: ' + self.url)
 
 
 class HeadingText(Webpage):
@@ -495,40 +497,41 @@ class HeadingText(Webpage):
         """
         Stores paragraphs, headings and header metadata to database.
         """
-        logger.debug(self.url)
-        logger.debug(
-            "storing {} paragraphs and headings".format(len(self.content)))
-        self.store_page()
-        previous_headings = {h: None for h in self.heading_tags}
-        webpage = self.webpage_entry
-        first_heading = True
-        heading = None
-        for item, tag in self.content:
-            item = item.strip(' \t\n\r')
-            if item == "":
-                continue
-            if tag in self.paragraph_tags and not first_heading:
-                new_paragraph = model.Paragraph(
-                    paragraph=item,
-                )
-                heading.paragraphs.append(new_paragraph)
-                webpage.paragraphs.append(new_paragraph)
-            else:
-                if not first_heading:
-                    webpage.headings.append(heading)
+        with self.database_lock:
+            logger.debug(self.url)
+            logger.debug(
+                "storing {} paragraphs and headings".format(len(self.content)))
+            self.store_page()
+            previous_headings = {h: None for h in self.heading_tags}
+            webpage = self.webpage_entry
+            first_heading = True
+            heading = None
+            for item, tag in self.content:
+                item = item.strip(' \t\n\r')
+                if item == "":
+                    continue
+                if tag in self.paragraph_tags and not first_heading:
+                    new_paragraph = model.Paragraph(
+                        paragraph=item,
+                    )
+                    heading.paragraphs.append(new_paragraph)
+                    webpage.paragraphs.append(new_paragraph)
                 else:
-                    first_heading = False
-                previous_headings[tag] = item
-                heading = model.Heading(
-                    h1=previous_headings['h1'],
-                    h2=previous_headings['h2'],
-                    h3=previous_headings['h3'],
-                    h4=previous_headings['h4'],
-                    h5=previous_headings['h5'],
-                    h6=previous_headings['h6'],
-                )
-        self.store_model(item=webpage)
-        logger.debug('Stored paragraphs and headings for: ' + self.url)
+                    if not first_heading:
+                        webpage.headings.append(heading)
+                    else:
+                        first_heading = False
+                    previous_headings[tag] = item
+                    heading = model.Heading(
+                        h1=previous_headings['h1'],
+                        h2=previous_headings['h2'],
+                        h3=previous_headings['h3'],
+                        h4=previous_headings['h4'],
+                        h5=previous_headings['h5'],
+                        h6=previous_headings['h6'],
+                    )
+            self.store_model(item=webpage)
+            logger.debug('Stored paragraphs and headings for: ' + self.url)
 
 
 class Links(Webpage):
