@@ -4,6 +4,7 @@ __author__ = 'roelvdberg@gmail.com'
 from datetime import datetime as dt
 import dateutil.parser as dtparser
 import logging
+import threading
 from time import sleep
 import urllib.parse
 import urllib.request as request
@@ -180,7 +181,8 @@ class Webpage(object):
     robot_archive_options = ("noarchive", "nosnippet", "noindex")
     parser = etree.HTML
 
-    def __init__(self, url, html=None, base_url=None, *args, **kwargs):
+    def __init__(self, url, html=None, base_url=None, database_lock=None,
+                 *args, **kwargs):
         """
         Fetch all content from a site and parse it.
 
@@ -194,6 +196,10 @@ class Webpage(object):
             obtained, this can be given in html.
         :param base_url: (optional) the base url that belongs to this url.
         """
+        if not database_lock:
+            self.database_lock = threading.RLock()
+        else:
+            self.database_lock = database_lock
         if not isinstance(self.tag, list):
             self.tag = [self.tag]
             self.name = [self.name]
@@ -357,39 +363,27 @@ class Webpage(object):
 
         :param item: SQL Alchemy database item
         """
-        try:
+        with self.database_lock:
             self.session.add(item)
             self.session.commit()
-        except sqlalchemy.exc.OperationalError:
-            self.session.rollback()
-            sleep(5)
-            self.store_model(item)
 
     @property
     def website_entry(self):
         """
         Website entry in database that belongs to this webpage.
         """
-        try: 
+        with self.database_lock:
             return self.session.query(model.Website).filter_by(
                 url=self.base_url).one()
-        except sqlalchemy.exc.OperationalError:
-            self.session.rollback()
-            sleep(5)
-            return self.website_entry
 
     @property
     def webpage_entry(self):
         """
         Webpage entry in database that belongs to this webpage.
         """
-        try:
+        with self.database_lock:
             return self.session.query(model.Webpage).filter_by(
                 url=self.url).one()
-        except sqlalchemy.exc.OperationalError:
-            self.session.rollback()
-            sleep(5)
-            return self.webpage_entry
 
     def store_page(self):
         """
