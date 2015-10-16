@@ -29,8 +29,8 @@ MAX_RUN_ITERATIONS = 1
 MAX_THREADS = 30
 
 VERBOSE = False
-DATABASE_FILENAME = '/media/usb/nieuwscrawltest.sqlite3'
-LOG_FILENAME = '/media/usb/nieuwscrawltest.log'
+DATABASE_FILENAME = 'nieuwscrawltest.sqlite3'
+LOG_FILENAME = 'nieuwscrawltest.log'
 RESET_DATABASE = False
 
 NOFOLLOW = [
