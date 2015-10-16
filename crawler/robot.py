@@ -102,7 +102,7 @@ class Txt(robotparser.RobotFileParser):
                             logger.debug(
                                 "SITEMAP: loading {}".format(sitemap_url))
                             self.sitemap = sitemap_class(sitemap_url)
-                    except (AttributeError, TypeError):
+                    except (AttributeError, TypeError, ValueError):
                         logger.debug(
                             "SITEMAP: LOADING FAILED {}".format(sitemap_url))
                 elif line[0].lower().startswith('crawl-delay'):

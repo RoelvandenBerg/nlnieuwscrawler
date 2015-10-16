@@ -53,11 +53,12 @@ class BaseUrl(list):
     """
     base_regex = re.compile(r"^(?:http)s?://[\w\-_\.]+", re.IGNORECASE)
 
-    def __init__(self, base):
+    def __init__(self, base, database_lock):
         """
         :param base: either a string with a base url or a list of strings with
             base urls.
         """
+        self.database_lock = database_lock
         super().__init__()
         self.session = model.Session()
         self += [[] for _ in range(CRAWL_DEPTH + 1)]
@@ -73,9 +74,10 @@ class BaseUrl(list):
         Stores url to website table in database.
         :param url: website base url
         """
-        new_item = model.Website(url=url)
-        self.session.add(new_item)
-        self.session.commit()
+        with self.database_lock:
+            new_item = model.Website(url=url)
+            self.session.add(new_item)
+            self.session.commit()
 
     def add(self, url, current_depth):
         """
@@ -195,7 +197,7 @@ class Website(object):
     """
 
     def __init__(self, base, link_queue, historic_links, page=webpage.Empty,
-                 base_url=None, depth=0):
+                 base_url=None, depth=0, database_lock=None):
         """
         :param base: base url string .
         :param link_queue: queue from base url.
@@ -204,6 +206,10 @@ class Website(object):
         :param base_url: BaseUrl object that at least contains this website.
         :param depth: crawl depth of this website.
         """
+        if not database_lock:
+            self.database_lock = threading.RLock()
+        else:
+            self.database_lock = database_lock
         self.base = base
         self.has_content = True
         self.robot_txt = robot.Txt(urllib.parse.urljoin(base, 'robots.txt'))
@@ -211,7 +217,7 @@ class Website(object):
         if base_url:
             self.base_url = base_url
         else:
-            self.base_url = BaseUrl(base)
+            self.base_url = BaseUrl(base, self.database_lock)
             _, _, links = self.base_url.base_queue.get()
         self.links = link_queue
         self.depth = depth
@@ -243,7 +249,7 @@ class Website(object):
             try:
                 time.sleep(
                     self.robot_txt.crawl_delay + start_time - time.time())
-            except ValueError:
+            except:    # ONTZETTENDE HACK
                 pass
 
     def _run_once(self):
@@ -258,7 +264,8 @@ class Website(object):
         try:
             page = self.webpage(
                 url=link,
-                base_url=self.base
+                base_url=self.base,
+                database_lock=self.database_lock
             )
         except (urllib.error.HTTPError, UnicodeEncodeError):
             logger.debug('WEBSITE: HTTP error @ {}'.format(link))
@@ -292,7 +299,8 @@ class Crawler(object):
         :param sitelist: a list of sites to be crawled.
         :param page: webpage class used for crawling
         """
-        self.base_url = BaseUrl(sitelist)
+        self.database_lock = threading.RLock()
+        self.base_url = BaseUrl(sitelist, self.database_lock)
         self.websites = []
         self.webpage = page
 
@@ -335,6 +343,7 @@ class Crawler(object):
             page=self.webpage,
             base_url=self.base_url,
             depth=depth,
+            database_lock=self.database_lock
         )
         website.run()
         self.websites.append(website)

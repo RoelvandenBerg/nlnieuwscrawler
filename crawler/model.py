@@ -84,5 +84,8 @@ def clear_all():
 
 
 if __name__ == '__main__':
+    print('clear all')
     clear_all()
+    print('create_all')
+    print('sqlite:///' + DATABASE_FILENAME)
     create_all()
