@@ -8,7 +8,7 @@ from zipfile import ZipFile
 
 import lxml.etree as etree
 
-import webpage
+import crawler.webpage as webpage
 
 
 class SitemapMixin(object):

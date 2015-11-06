@@ -5,16 +5,15 @@ from datetime import datetime as dt
 import dateutil.parser as dtparser
 import logging
 import threading
-from time import sleep
 import urllib.parse
 import urllib.request as request
 
 from lxml import etree
-import sqlalchemy
+from sqlalchemy.orm.exc import NoResultFound
 
-import model
-from settings import USER_AGENT_INFO, USER_AGENT, LOG_FILENAME
-import validate
+import crawler.model as model
+from crawler.settings import USER_AGENT_INFO, USER_AGENT, DATE_TIME_DISTANCE
+import crawler.validate as validate
 
 # setup logger
 logger = logging.getLogger(__name__)
@@ -35,7 +34,6 @@ def stringify(string):
     else:
         return ""
 
-
 class Head(object):
     """
     Contains head tags and values for a webpage after parse()
@@ -53,23 +51,23 @@ class Head(object):
                 "keywords": "keywords",
                 "description": "description",
                 "author": "author",
-                "revisit-after": "revisit-after",
+                "revisit-after": "revisit_after",
                 "robots": "robots"
             }),
             ("property", {
                 "og:description": "description",
                 "og:title": "title",
-                "article:published_time": "time",
-                "article:modified_time": "time",
+                "article:published_time": "published_time",
+                "article:modified_time": "modified_time",
                 "article:expiration_time": "expiration_time",
                 "article:author": "author",
                 "article:section": "section",
-                "article:tag": "tag"
+                "article:tag": "article_tag"
             }),
         )
     }
 
-    def __init__(self, htmltree):
+    def __init__(self, htmltree, html):
         """
         Initialize root with htmltree at head location.
 
@@ -79,7 +77,8 @@ class Head(object):
             self.root = htmltree.xpath(self.location)[0]
         except IndexError:
             self.root = []
-        self.html = htmltree
+        self.htmltree = htmltree
+        self.html = html
 
     def parse(self):
         """
@@ -89,14 +88,9 @@ class Head(object):
             self.search(el)
         if not 'time' in self.__dict__:
             try:
-                self.time = self.html.xpath(r'.//time')[0]
-            except IndexError:
-                try:
-                    logger.debug(
-                        'head {} does not have time'.format(self.title))
-                except AttributeError:
-                    logger.debug('head object does not have time')
-
+                self.parse_time()
+            except:
+                pass
 
     def find_name_value(self, tag_name_pair, element):
         """
@@ -147,7 +141,182 @@ class Head(object):
         setattr(self, name, value)
 
 
-class Webpage(object):
+class WebpageRaw(object):
+    robot_archive_options = ("noarchive", "nosnippet", "noindex")
+    head = True
+    parser = etree.HTML
+
+    def __init__(self, url, html=None, base_url=None, database_lock=None,
+                 *args, **kwargs):
+        """
+        Fetch all content from a site and store it in text format.
+
+        Apart from the arguments described below, extra arguments and key-value
+        pairs will be handed over to the fetch method and from that rest
+        arguments are handed over to the parse method. View those methods for
+        the extra possible parameters.
+
+        :param url: the http-address of the website that is to be parsed.
+        :param base_url: (optional) the base url that belongs to this url.
+        """
+        if not database_lock:
+            self.database_lock = threading.RLock()
+        else:
+            self.database_lock = database_lock
+        if base_url:
+            self.base_url = base_url
+        else:
+            self.base_url = url
+        self.html = html
+        self.url = url
+        self.session = model.Session()
+        self.fetch(*args, **kwargs)
+        if self.head:
+            self.head = Head(self.base_tree, self.html)
+            self.head.parse()
+
+    def fetch(self, url=None, download=True, *args, **kwargs):
+        """
+        Fetches the content of a webpage, based on an url.
+
+        Apart from the arguments described below, extra arguments and key-value
+        pairs will be handed over to the parse method. View that method for
+        the extra possible parameters.
+
+        :param url: the url which content will be downloaded.
+        :param download: default: True, if set to False, the url content will
+            not be downloaded. The parse method will look at the html content
+            given on initialization.
+        """
+        if download and not self.html:
+            if url is None:
+                url = self.url
+            data, header = self.agent
+            with request.urlopen(request.Request(url, headers=header)) \
+                    as response:
+                self.html = response.read()
+        self.parse(*args, **kwargs)
+
+    def parse(self, *args, **kwargs):
+        self.base_tree = self.parser(self.html)
+
+    def store(self):
+        """
+        Overwrite in child classes to store content to other database tables.
+        """
+        self.store_page()
+
+    def store_model(self, item):
+        """
+        Stores SQL Alchemy database item to database.
+
+        :param item: SQL Alchemy database item
+        """
+        with self.database_lock:
+            self.session.add(item)
+            self.session.commit()
+
+    @property
+    def website_entry(self):
+        """
+        Website entry in database that belongs to this webpage.
+        """
+        with self.database_lock:
+            return self.session.query(model.Website).filter_by(
+                url=self.base_url).one()
+
+    @property
+    def webpage_entry(self):
+        """
+        Webpage entry in database that belongs to this webpage.
+        """
+        with self.database_lock:
+            return self.session.query(model.Webpage).filter_by(
+                url=self.url).all()
+
+    @property
+    def last_webpage_entry(self):
+        return self.webpage_entry[-1]
+
+    @property
+    def webpage_created(self):
+        try:
+            return self.webpage_entry[0].crawl_created
+        except (AttributeError, IndexError, NoResultFound):
+            return dt.now()
+
+    def store_page(self):
+        """
+        Store parsed webpage to database.
+        """
+        with self.database_lock:
+            datetimenow = dt.now()
+            times = {"published_time": None, "modified_time": None,
+                     "expiration_time": None}
+            for time in times.keys():
+                timestr = self.find_in_head(time)
+                if timestr:
+                    times[time] = dtparser.parse(timestr, dayfirst=True)
+            head_item = model.Webpage(
+                content=self.html,
+                crawl_created=self.webpage_created,
+                crawl_modified=datetimenow,
+                url=self.url,
+                revisit=self.find_in_head("revisit_after"),
+                published_time=times['published_time'],
+                modified_time=times["modified_time"],
+                expiration_time=times["expiration_time"],
+                title=self.find_in_head("title"),
+                description=self.find_in_head("description"),
+                author=self.find_in_head("author"),
+                section=self.find_in_head("section"),
+                tag=self.find_in_head("article_tag"),
+                keywords=self.find_in_head("keywords")
+            )
+            website = self.website_entry
+            website.modified = datetimenow
+            website.webpages.append(head_item)
+            self.store_model(item=website)
+            logger.debug('Webpage entry added: {}'.format(self.url))
+
+
+    @property
+    def agent(self):
+        """
+        Useragent data and headers for this crawler.
+        """
+        data = urllib.parse.urlencode(USER_AGENT_INFO)
+        data = data.encode('utf-8')
+        headers = {'User-Agent': USER_AGENT}
+        return data, headers
+
+    @property
+    def head_robots(self):
+        """
+        Text from head.robots
+        """
+        try:
+            return self.head.robots.lower()
+        except AttributeError:
+            return ""
+
+    @property
+    def followable(self):
+        """
+        Boolean: Head information states if a page is followable
+        """
+        return not "nofollow" in self.head_robots
+
+    @property
+    def archivable(self):
+        """
+        Boolean: Head information states if a page is archivable.
+        """
+        return not any(robotsetting in self.head_robots for robotsetting in
+                       self.robot_archive_options)
+
+
+class Webpage(WebpageRaw):
     """
     Fetches content from an [url] and parses its contents on initialisation.
 
@@ -177,9 +346,6 @@ class Webpage(object):
     attr = None
     split_content = True
     one_tag = False
-    head = True
-    robot_archive_options = ("noarchive", "nosnippet", "noindex")
-    parser = etree.HTML
 
     def __init__(self, url, html=None, base_url=None, database_lock=None,
                  *args, **kwargs):
@@ -196,10 +362,6 @@ class Webpage(object):
             obtained, this can be given in html.
         :param base_url: (optional) the base url that belongs to this url.
         """
-        if not database_lock:
-            self.database_lock = threading.RLock()
-        else:
-            self.database_lock = database_lock
         if not isinstance(self.tag, list):
             self.tag = [self.tag]
             self.name = [self.name]
@@ -210,39 +372,8 @@ class Webpage(object):
             self.attr = {self.tag[i]: attr for i, attr in enumerate(self.attr)}
         except TypeError:
             self.attr = None
-        if base_url:
-            self.base_url = base_url
-        else:
-            self.base_url = url
-        self.url = url
-        self.html = html
-        self.fetch(*args, **kwargs)
-        if self.head:
-            self.head = Head(self.base_tree)
-            self.head.parse()
-        self.session = model.Session()
-
-    def fetch(self, url=None, download=True, *args, **kwargs):
-        """
-        Fetches the content of a webpage, based on an url.
-
-        Apart from the arguments described below, extra arguments and key-value
-        pairs will be handed over to the parse method. View that method for
-        the extra possible parameters.
-
-        :param url: the url which content will be downloaded.
-        :param download: default: True, if set to False, the url content will
-            not be downloaded. The parse method will look at the html content
-            given on initialization.
-        """
-        if download and not self.html:
-            if url is None:
-                url = self.url
-            data, header = self.agent
-            with request.urlopen(request.Request(url, headers=header)) \
-                    as response:
-                self.html = response.read()
-        self.parse(*args, **kwargs)
+        super().__init__(url, html, base_url, database_lock, *args,
+                         **kwargs)
 
     def parse(self, selector_string=None, selector_method_name="xpath"):
         """
@@ -257,7 +388,7 @@ class Webpage(object):
         :param selector_string: for example ".//a" for a hyperlink.
         :param selector_method_name: either 'xpath' or 'cssselect'
         """
-        self.base_tree = self.parser(self.html)
+        super().parse()
         self.trees = [self.base_tree]
         if selector_string:
             self.trees = self._fetch_by_method(
@@ -351,103 +482,6 @@ class Webpage(object):
         except:
             return None
 
-    def store(self):
-        """
-        Overwrite in child classes to store content to other database tables.
-        """
-        self.store_page()
-
-    def store_model(self, item):
-        """
-        Stores SQL Alchemy database item to database.
-
-        :param item: SQL Alchemy database item
-        """
-        with self.database_lock:
-            self.session.add(item)
-            self.session.commit()
-
-    @property
-    def website_entry(self):
-        """
-        Website entry in database that belongs to this webpage.
-        """
-        with self.database_lock:
-            return self.session.query(model.Website).filter_by(
-                url=self.base_url).one()
-
-    @property
-    def webpage_entry(self):
-        """
-        Webpage entry in database that belongs to this webpage.
-        """
-        with self.database_lock:
-            return self.session.query(model.Webpage).filter_by(
-                url=self.url).one()
-
-    def store_page(self):
-        """
-        Store parsed webpage to database.
-        """
-        with self.database_lock:
-            datetimenow = dt.now()
-            pub_timestring = self.find_in_head("time")
-            if pub_timestring:
-                published_time = dtparser.parse(pub_timestring, dayfirst=True)
-            else:
-                published_time = None
-            head_item = model.Webpage(
-                crawl_datetime=datetimenow,
-                url=self.url,
-                title=self.find_in_head("title"),
-                description=self.find_in_head("description"),
-                author=self.find_in_head("author"),
-                published_time=published_time,
-                expiration_time=self.find_in_head("expiration_time"),
-                section=self.find_in_head("section"),
-                tag=self.find_in_head("tag"),
-                keywords=self.find_in_head("keywords"),
-            )
-            website = self.website_entry
-            website.webpages.append(head_item)
-            self.store_model(item=website)
-            logger.debug('Webpage entry added: {}'.format(self.url))
-
-    @property
-    def agent(self):
-        """
-        Useragent data and headers for this crawler.
-        """
-        data = urllib.parse.urlencode(USER_AGENT_INFO)
-        data = data.encode('utf-8')
-        headers = {'User-Agent': USER_AGENT}
-        return data, headers
-
-    @property
-    def head_robots(self):
-        """
-        Text from head.robots
-        """
-        try:
-            return self.head.robots.lower()
-        except AttributeError:
-            return ""
-
-    @property
-    def followable(self):
-        """
-        Boolean: Head information states if a page is followable
-        """
-        return not "nofollow" in self.head_robots
-
-    @property
-    def archivable(self):
-        """
-        Boolean: Head information states if a page is archivable.
-        """
-        return not any(robotsetting in self.head_robots for robotsetting in
-                       self.robot_archive_options)
-
 
 class Empty(Webpage):
     """
@@ -476,7 +510,7 @@ class Text(Webpage):
                                 for txt in self.text] if x != ""]
             logger.debug("storing {} paragraphs".format(len(text)))
             self.store_page()
-            webpage = self.webpage_entry
+            webpage = self.last_webpage_entry
             for paragraph in text:
                 new_item = model.Paragraph(
                     paragraph=paragraph,
@@ -503,7 +537,7 @@ class HeadingText(Webpage):
                 "storing {} paragraphs and headings".format(len(self.content)))
             self.store_page()
             previous_headings = {h: None for h in self.heading_tags}
-            webpage = self.webpage_entry
+            webpage = self.last_webpage_entry
             first_heading = True
             heading = None
             for item, tag in self.content:
@@ -528,7 +562,7 @@ class HeadingText(Webpage):
                         h3=previous_headings['h3'],
                         h4=previous_headings['h4'],
                         h5=previous_headings['h5'],
-                        h6=previous_headings['h6'],
+                        h6=previous_headings['h6']
                     )
             self.store_model(item=webpage)
             logger.debug('Stored paragraphs and headings for: ' + self.url)

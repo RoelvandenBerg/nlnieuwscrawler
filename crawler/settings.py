@@ -28,6 +28,8 @@ RUN_WAIT_TIME = 5
 MAX_RUN_ITERATIONS = 1
 MAX_THREADS = 30
 
+DATE_TIME_DISTANCE = 4
+
 VERBOSE = False
 DATABASE_FILENAME = 'nieuwscrawltest.sqlite3'
 LOG_FILENAME = 'nieuwscrawltest.log'

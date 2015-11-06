@@ -11,10 +11,10 @@ import urllib.error
 import urllib.parse
 
 from settings import *
-import validate
-import model
-import robot
-import webpage
+import crawler.validate as validate
+import crawler.model as model
+import crawler.robot as robot
+import crawler.webpage as webpage
 
 
 # setup logger
@@ -75,7 +75,11 @@ class BaseUrl(list):
         :param url: website base url
         """
         with self.database_lock:
-            new_item = model.Website(url=url)
+            new_item = model.Website(
+                url=url,
+                created=dt.now(),
+                modified=dt.now()
+            )
             self.session.add(new_item)
             self.session.commit()
 
@@ -196,7 +200,7 @@ class Website(object):
     Website crawler that crawls all pages in a website.
     """
 
-    def __init__(self, base, link_queue, historic_links, page=webpage.Empty,
+    def __init__(self, base, link_queue, historic_links, page=webpage.WebpageRaw,
                  base_url=None, depth=0, database_lock=None):
         """
         :param base: base url string .
@@ -350,5 +354,5 @@ class Crawler(object):
 
 
 if __name__ == "__main__":
-    standalone_crawler = Crawler(SITES, webpage.HeadingText)
+    standalone_crawler = Crawler(SITES)
     standalone_crawler.run()

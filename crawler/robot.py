@@ -5,8 +5,8 @@ import logging
 import urllib.parse
 import urllib.robotparser as robotparser
 
-from settings import CRAWL_DELAY
-import sitemap
+from crawler.settings import CRAWL_DELAY
+import crawler.sitemap as sitemap
 
 
 # setup logger
@@ -82,16 +82,22 @@ class Txt(robotparser.RobotFileParser):
                         state = 2
                 elif line[0] == 'sitemap':
                     sitemap_url = line[1]
-                    if sitemap_url.endswith('.xml'):
+                    if sitemap_url.endswith('.xml') or (sitemap_url.startswith(
+                            'google') and sitemap_url.endswith('map')):
+                        logger.debug('XML sitemap chosen: ' + sitemap_url)
                         sitemap_class = sitemap.Xml
                     elif sitemap_url.endswith('.zip'):
+                        logger.debug('Zip sitemap chosen: ' + sitemap_url)
                         sitemap_class = sitemap.Zip
                     elif sitemap_url.endswith('.gz'):
+                        logger.debug('GunZip sitemap chosen: ' + sitemap_url)
                         sitemap_class = sitemap.GunZip
                     elif sitemap_url == '/sitemapindex/':
+                        logger.debug('HTML sitemap chosen: ' + sitemap_url)
                         sitemap_url = self.url[:-10] + "sitemapindex"
                         sitemap_class = sitemap.Html
                     else:
+                        logger.debug('unknown sitemaptype, switching to HTML: ' + sitemap_url)
                         sitemap_class = sitemap.Html
                     try:
                         if self.sitemap:
