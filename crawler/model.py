@@ -26,6 +26,7 @@ class Website(Base):
     webpages = relationship("Webpage", backref='websites')
     created = Column(DateTime)
     modified = Column(DateTime)
+    crawl_depth = Column(Integer)
     url = Column(String)
 
 
@@ -52,7 +53,7 @@ class Webpage(Base):
 
     def __repr__(self):
        return "<Title(title={}, date crawled={})>".format(
-                            self.title, str(self.datetime))
+                            self.title, str(self.crawl_modified))
 
 
 class Paragraph(Base):

@@ -12,7 +12,7 @@ from lxml import etree
 from sqlalchemy.orm.exc import NoResultFound
 
 import crawler.model as model
-from crawler.settings import USER_AGENT_INFO, USER_AGENT, DATE_TIME_DISTANCE
+from crawler.settings import USER_AGENT_INFO, USER_AGENT
 import crawler.validate as validate
 
 # setup logger
@@ -142,7 +142,7 @@ class Head(object):
 
 
 class WebpageRaw(object):
-    robot_archive_options = ("noarchive", "nosnippet", "noindex")
+    robot_archive_options = ["noarchive", "nosnippet", "noindex"]
     head = True
     parser = etree.HTML
 
@@ -280,6 +280,18 @@ class WebpageRaw(object):
             logger.debug('Webpage entry added: {}'.format(self.url))
 
 
+    def find_in_head(self, attr):
+        """
+        Finds attribute in self.head.
+
+        :param attr: head attribute name
+        :return: head attribute or None when the attribute does not exist.
+        """
+        try:
+            return getattr(self.head, attr)
+        except:
+            return None
+
     @property
     def agent(self):
         """
@@ -342,8 +354,8 @@ class Webpage(WebpageRaw):
     :param parser: HTML or XML lxml parser (etree.XML or etree.HTML).
     """
     tag = ""
-    name = None
-    attr = None
+    name = []
+    attr = []
     split_content = True
     one_tag = False
 
@@ -364,14 +376,11 @@ class Webpage(WebpageRaw):
         """
         if not isinstance(self.tag, list):
             self.tag = [self.tag]
+        if not isinstance(self.name, list):
             self.name = [self.name]
+        if not isinstance(self.attr, list):
             self.attr = [self.attr]
             self.one_tag = True
-        self.name = {self.tag[i]: name for i, name in enumerate(self.name)}
-        try:
-            self.attr = {self.tag[i]: attr for i, attr in enumerate(self.attr)}
-        except TypeError:
-            self.attr = None
         super().__init__(url, html, base_url, database_lock, *args,
                          **kwargs)
 
@@ -393,39 +402,33 @@ class Webpage(WebpageRaw):
         if selector_string:
             self.trees = self._fetch_by_method(
                 selector_string, selector_method_name)
-        parse_iterator = ((self._get_attr(y), y.tag) for x in self.trees
-                          for y in x.iter() if y.tag in self.tag)
-        self.content = self.parse_edit(parse_iterator)
-        if self.one_tag:
-            tag = self.tag[0]
-            content = [x[0] for x in self.content]
-            self._set_content(tag, content)
-        elif self.split_content:
-            for tag in self.tag:
-                content = [x[0] for x in self.content if x[1] == tag]
-                self._set_content(tag, content)
+        for i, t in enumerate(self.tag):
+            content = [self._get_attr(y, i) for x in self.trees for y
+                              in x.iter() if y.tag == t]
+            self._set_content(i, t, content)
+        self.parse_edit()
 
-    def _set_content(self, tag, content):
+    def _set_content(self, i, tag, content):
         """
         Stores the tag content under the given name (self.name; see class
         description of self.name for alternative naming).
         """
         try:
-            setattr(self, self.name[tag], content)
+            setattr(self, self.name[i], content)
         except (TypeError, IndexError):
             try:
-                setattr(self, self.attr[tag], content)
+                setattr(self, self.attr[i], content)
             except (TypeError, IndexError):
                 setattr(self, tag, content)
 
-    def parse_edit(self, iterator):
+    def parse_edit(self):
         """
         Optionally overwrite by a child class to adapt parsed elements.
 
         :param iterator: the iterator received from the parse method.
         :return: the result should be a list of strings.
         """
-        return list(iterator)
+        pass
 
     def _fetch_by_method(self, selector_string, selector_method_name):
         """
@@ -443,7 +446,7 @@ class Webpage(WebpageRaw):
         """
         return self.trees[0][selector_method_name](selector_string)
 
-    def _get_attr(self, element):
+    def _get_attr(self, element, i):
         """
         Try to get attribute value or text from element.
 
@@ -454,8 +457,8 @@ class Webpage(WebpageRaw):
         :return: Returns attribute value or all underlying text of an element.
         """
         try:
-            return element.attrib[self.attr[element.tag]]
-        except TypeError:
+            return element.attrib[self.attr[i]]
+        except (TypeError, IndexError):
             return self._textwalk(element)
         except KeyError:
             return ""
@@ -470,20 +473,8 @@ class Webpage(WebpageRaw):
         children = [self._textwalk(x) + stringify(x.tail) for x in element]
         return stringify(element.text) + "".join(children)
 
-    def find_in_head(self, attr):
-        """
-        Finds attribute in self.head.
 
-        :param attr: head attribute name
-        :return: head attribute or None when the attribute does not exist.
-        """
-        try:
-            return getattr(self.head, attr)
-        except:
-            return None
-
-
-class Empty(Webpage):
+class Empty(WebpageRaw):
     """
     Empty webpage class that can serve as a dummy class for Crawler.
     Using this, the crawler will work in its purest form: only harvesting
@@ -524,7 +515,7 @@ class HeadingText(Webpage):
     paragraph_tags = ['p', 'li']
     heading_tags = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']
     tag = ['p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']
-    name = [None] * 6
+    name = ['p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']
     split_content = False
 
     def store(self):
@@ -532,38 +523,47 @@ class HeadingText(Webpage):
         Stores paragraphs, headings and header metadata to database.
         """
         with self.database_lock:
-            logger.debug(self.url)
             logger.debug(
-                "storing {} paragraphs and headings".format(len(self.content)))
+                "Storing {} paragraphs and headings for {}".format(
+                    sum([len(getattr(self, x, [])) for x in
+                        self.paragraph_tags]),
+                    self.url
+                )
+            )
             self.store_page()
             previous_headings = {h: None for h in self.heading_tags}
             webpage = self.last_webpage_entry
             first_heading = True
             heading = None
-            for item, tag in self.content:
-                item = item.strip(' \t\n\r')
-                if item == "":
+            for tag in self.paragraph_tags:
+                try:
+                    elements = getattr(self, tag)
+                except AttributeError:
                     continue
-                if tag in self.paragraph_tags and not first_heading:
-                    new_paragraph = model.Paragraph(
-                        paragraph=item,
-                    )
-                    heading.paragraphs.append(new_paragraph)
-                    webpage.paragraphs.append(new_paragraph)
-                else:
-                    if not first_heading:
-                        webpage.headings.append(heading)
+                for item in elements:
+                    item = item.strip(' \t\n\r')
+                    if item == "":
+                        continue
+                    if tag in self.paragraph_tags and not first_heading:
+                        new_paragraph = model.Paragraph(
+                            paragraph=item,
+                        )
+                        heading.paragraphs.append(new_paragraph)
+                        webpage.paragraphs.append(new_paragraph)
                     else:
-                        first_heading = False
-                    previous_headings[tag] = item
-                    heading = model.Heading(
-                        h1=previous_headings['h1'],
-                        h2=previous_headings['h2'],
-                        h3=previous_headings['h3'],
-                        h4=previous_headings['h4'],
-                        h5=previous_headings['h5'],
-                        h6=previous_headings['h6']
-                    )
+                        if not first_heading:
+                            webpage.headings.append(heading)
+                        else:
+                            first_heading = False
+                        previous_headings[tag] = item
+                        heading = model.Heading(
+                            h1=previous_headings['h1'],
+                            h2=previous_headings['h2'],
+                            h3=previous_headings['h3'],
+                            h4=previous_headings['h4'],
+                            h5=previous_headings['h5'],
+                            h6=previous_headings['h6']
+                        )
             self.store_model(item=webpage)
             logger.debug('Stored paragraphs and headings for: ' + self.url)
 
@@ -572,16 +572,14 @@ class Links(Webpage):
     """
     Fetches content from webpage by url and returns its hyperlinks.
     """
-    tag = "a"
-    attr = "href"
-    name = "links"
+    tag = ["a", "a"]
+    attr = ["href", "rel"]
+    name = ["links", "robots"]
 
-    def parse_edit(self, iterator):
+    def parse_edit(self):
         """
-        When parsing, validate url.
-
-        :param iterator: list of urls to validate
-        :return: list of valid urls
+        When parsing, validate url. And check links for nofollow.
         """
-        iterator = list(iterator)
-        return [link for link in iterator if validate.url(link[0])]
+        robot_nofollow = self.robot_archive_options + ['nofollow']
+        self.links = [link for i, link in enumerate(self.links) if validate.url(
+            link) and not self.robots[i] in robot_nofollow]

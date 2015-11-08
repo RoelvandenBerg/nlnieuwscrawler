@@ -97,8 +97,9 @@ class Txt(robotparser.RobotFileParser):
                         sitemap_url = self.url[:-10] + "sitemapindex"
                         sitemap_class = sitemap.Html
                     else:
-                        logger.debug('unknown sitemaptype, switching to HTML: ' + sitemap_url)
-                        sitemap_class = sitemap.Html
+                        logger.debug('unknown sitemaptype, switching to XML: '
+                                     + sitemap_url)
+                        sitemap_class = sitemap.Xml
                     try:
                         if self.sitemap:
                             logger.debug(
