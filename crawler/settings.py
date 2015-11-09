@@ -22,11 +22,12 @@ SITES = [
 ]
 
 ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE = False
-CRAWL_DEPTH = 0
-CRAWL_DELAY = 5
-RUN_WAIT_TIME = 5
-MAX_RUN_ITERATIONS = 1
-MAX_THREADS = 30
+CRAWL_DEPTH = 0         # depth of links followed outside of base url
+CRAWL_DELAY = 5         # seconds of waiting time for each time crawled
+REVISIT_AFTER = 15      # revisit time in days
+MAX_THREADS = 100       # number of threads running at once
+
+DATE_TIME_DISTANCE = 4  # allowed distance in characters between date and time
 
 VERBOSE = False
 DATABASE_FILENAME = 'nieuwscrawltest.sqlite3'

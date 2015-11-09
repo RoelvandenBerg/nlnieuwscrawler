@@ -11,10 +11,10 @@ import urllib.error
 import urllib.parse
 
 from settings import *
-import validate
-import model
-import robot
-import webpage
+import crawler.validate as validate
+import crawler.model as model
+import crawler.robot as robot
+import crawler.webpage as webpage
 
 
 # setup logger
@@ -66,20 +66,45 @@ class BaseUrl(list):
         self.base_queue = queue.Queue()
         if isinstance(base, str):
             base = [base]
+        self.load_from_db = True
+        sites = self.load_from_database()
+        self.load_from_db = False
         for base_url in base:
-            self.append(base_url, 0)
+            if base_url not in sites and base_url + '/' not in sites:
+                self.append(base_url, 0)
 
-    def store(self, url):
+    def load_from_database(self):
+        sites = self.session.query(model.Website).all()
+        sitelist = []
+        for site in sites:
+            sitelist.append(site.url)
+            self.append(site.url, site.crawl_depth)
+        pages = self.session.query(model.Webpage).all()
+        now = dt.now()
+        for page in pages:
+            if (now - page.crawl_modified).days < REVISIT_AFTER:
+                site = self.session.query(model.Website).filter_by(
+                    id=page.website_id).one()
+                self.add(page.url, site.crawl_depth, True)
+                logger.debug('Not crawling: {}'.format(page.url))
+        return sitelist
+
+    def store(self, url, depth):
         """
         Stores url to website table in database.
         :param url: website base url
         """
         with self.database_lock:
-            new_item = model.Website(url=url)
+            new_item = model.Website(
+                url=url,
+                created=dt.now(),
+                modified=dt.now(),
+                crawl_depth=depth,
+            )
             self.session.add(new_item)
             self.session.commit()
 
-    def add(self, url, current_depth):
+    def add(self, url, current_depth, add_to_history=False):
         """
         Adds a url to self.
 
@@ -96,7 +121,8 @@ class BaseUrl(list):
                         if not url in link_history:
                             # link hasn been added before, so store it
                             link_history.append(url)
-                            link_queue.put(url)
+                            if not add_to_history:
+                                link_queue.put(url)
                         return
             # link has not been matched to any of the base urls, so append it
             # as a base url.
@@ -127,7 +153,8 @@ class BaseUrl(list):
                     historic_links.append(base)
                 self[depth].append((url, historic_links, link_queue))
                 self.base_queue.put((base, depth, historic_links, link_queue))
-                self.store(base)
+                if not self.load_from_db:
+                    self.store(base, depth)
             else:
                 logger.debug("BASE_URL: cannot add {}".format(base))
 
@@ -196,7 +223,7 @@ class Website(object):
     Website crawler that crawls all pages in a website.
     """
 
-    def __init__(self, base, link_queue, historic_links, page=webpage.Empty,
+    def __init__(self, base, link_queue, historic_links, page=webpage.WebpageRaw,
                  base_url=None, depth=0, database_lock=None):
         """
         :param base: base url string .
@@ -250,7 +277,7 @@ class Website(object):
                 time.sleep(
                     self.robot_txt.crawl_delay + start_time - time.time())
             except:    # ONTZETTENDE HACK
-                pass
+                logger.debug('crawl.Website.run sleep hack is used!')
 
     def _run_once(self):
         """Runs one webpage of a website crawler."""
@@ -294,7 +321,7 @@ class Crawler(object):
     Crawler that crawls sites based on a sitelist.
     Results are stored in a database defined in model.
     """
-    def __init__(self, sitelist, page=webpage.Empty):
+    def __init__(self, sitelist, page=webpage.WebpageRaw):
         """
         :param sitelist: a list of sites to be crawled.
         :param page: webpage class used for crawling

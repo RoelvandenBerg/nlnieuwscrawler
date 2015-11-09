@@ -24,6 +24,9 @@ class Website(Base):
     __tablename__ = 'websites'
     id = Column(Integer, primary_key=True)
     webpages = relationship("Webpage", backref='websites')
+    created = Column(DateTime)
+    modified = Column(DateTime)
+    crawl_depth = Column(Integer)
     url = Column(String)
 
 
@@ -31,12 +34,15 @@ class Webpage(Base):
     __tablename__ = 'webpages'
     id = Column(Integer, primary_key=True)
     website_id = Column(Integer, ForeignKey('websites.id'))
+    content = Column(String)
+    crawl_created = Column(DateTime)
+    crawl_modified = Column(DateTime)
+    url = Column(String)
     paragraphs = relationship("Paragraph", backref='webpages')
     headings = relationship("Heading", backref='webpages')
-    url = Column(String)
-    crawl_datetime = Column(DateTime)
-    datetime = Column(DateTime)
+    revisit = Column(String)
     published_time = Column(DateTime)
+    modified_time = Column(DateTime)
     expiration_time = Column(DateTime)
     title = Column(String)
     description = Column(String)
@@ -47,7 +53,7 @@ class Webpage(Base):
 
     def __repr__(self):
        return "<Title(title={}, date crawled={})>".format(
-                            self.title, str(self.datetime))
+                            self.title, str(self.crawl_modified))
 
 
 class Paragraph(Base):

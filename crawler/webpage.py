@@ -5,16 +5,15 @@ from datetime import datetime as dt
 import dateutil.parser as dtparser
 import logging
 import threading
-from time import sleep
 import urllib.parse
 import urllib.request as request
 
 from lxml import etree
-import sqlalchemy
+from sqlalchemy.orm.exc import NoResultFound
 
-import model
-from settings import USER_AGENT_INFO, USER_AGENT, LOG_FILENAME
-import validate
+import crawler.model as model
+from crawler.settings import USER_AGENT_INFO, USER_AGENT
+import crawler.validate as validate
 
 # setup logger
 logger = logging.getLogger(__name__)
@@ -35,7 +34,6 @@ def stringify(string):
     else:
         return ""
 
-
 class Head(object):
     """
     Contains head tags and values for a webpage after parse()
@@ -53,23 +51,23 @@ class Head(object):
                 "keywords": "keywords",
                 "description": "description",
                 "author": "author",
-                "revisit-after": "revisit-after",
+                "revisit-after": "revisit_after",
                 "robots": "robots"
             }),
             ("property", {
                 "og:description": "description",
                 "og:title": "title",
-                "article:published_time": "time",
-                "article:modified_time": "time",
+                "article:published_time": "published_time",
+                "article:modified_time": "modified_time",
                 "article:expiration_time": "expiration_time",
                 "article:author": "author",
                 "article:section": "section",
-                "article:tag": "tag"
+                "article:tag": "article_tag"
             }),
         )
     }
 
-    def __init__(self, htmltree):
+    def __init__(self, htmltree, html):
         """
         Initialize root with htmltree at head location.
 
@@ -79,7 +77,8 @@ class Head(object):
             self.root = htmltree.xpath(self.location)[0]
         except IndexError:
             self.root = []
-        self.html = htmltree
+        self.htmltree = htmltree
+        self.html = html
 
     def parse(self):
         """
@@ -89,14 +88,9 @@ class Head(object):
             self.search(el)
         if not 'time' in self.__dict__:
             try:
-                self.time = self.html.xpath(r'.//time')[0]
-            except IndexError:
-                try:
-                    logger.debug(
-                        'head {} does not have time'.format(self.title))
-                except AttributeError:
-                    logger.debug('head object does not have time')
-
+                self.parse_time()
+            except:
+                pass
 
     def find_name_value(self, tag_name_pair, element):
         """
@@ -147,44 +141,15 @@ class Head(object):
         setattr(self, name, value)
 
 
-class Webpage(object):
-    """
-    Fetches content from an [url] and parses its contents on initialisation.
-
-    This is a base class that can be inherited. Minimally one should overwrite
-    the tag and name values. Children can set the following attributes:
-
-    :param tag: sought tag(s) can be a list of strings or a string.
-    :param name: the name (string) or list of names (this should correspond
-        with self.tag, except if None is given) under which the tag should be
-        stored in the Webpage object during parsing. If None is given, if it
-        exists (not None) the attribute name (self.attr[i]) at the right index
-        is used or else  the tag name (self.tag[i]) at the right index is taken
-        as a name.
-    :param attr: sought attribute(s) can be a list of strings or a string. The
-        chosen form must correspond with self.tag.
-    :param split_content: if True saves content as attributes to self else
-        content is only stored as 'content'.
-    :param head: if True is given a metadata from the head will be stored in
-        this attribute.
-    :param robot_archive_options: website will not be archived if any of these
-        is matched by attribute values from the robots metadata attribute in
-        the head-section of a website.
-    :param parser: HTML or XML lxml parser (etree.XML or etree.HTML).
-    """
-    tag = ""
-    name = None
-    attr = None
-    split_content = True
-    one_tag = False
+class WebpageRaw(object):
+    robot_archive_options = ["noarchive", "nosnippet", "noindex"]
     head = True
-    robot_archive_options = ("noarchive", "nosnippet", "noindex")
     parser = etree.HTML
 
     def __init__(self, url, html=None, base_url=None, database_lock=None,
                  *args, **kwargs):
         """
-        Fetch all content from a site and parse it.
+        Fetch all content from a site and store it in text format.
 
         Apart from the arguments described below, extra arguments and key-value
         pairs will be handed over to the fetch method and from that rest
@@ -192,35 +157,23 @@ class Webpage(object):
         the extra possible parameters.
 
         :param url: the http-address of the website that is to be parsed.
-        :param html: (optional) in case the content of a site is allready
-            obtained, this can be given in html.
         :param base_url: (optional) the base url that belongs to this url.
         """
         if not database_lock:
             self.database_lock = threading.RLock()
         else:
             self.database_lock = database_lock
-        if not isinstance(self.tag, list):
-            self.tag = [self.tag]
-            self.name = [self.name]
-            self.attr = [self.attr]
-            self.one_tag = True
-        self.name = {self.tag[i]: name for i, name in enumerate(self.name)}
-        try:
-            self.attr = {self.tag[i]: attr for i, attr in enumerate(self.attr)}
-        except TypeError:
-            self.attr = None
         if base_url:
             self.base_url = base_url
         else:
             self.base_url = url
-        self.url = url
         self.html = html
+        self.url = url
+        self.session = model.Session()
         self.fetch(*args, **kwargs)
         if self.head:
-            self.head = Head(self.base_tree)
+            self.head = Head(self.base_tree, self.html)
             self.head.parse()
-        self.session = model.Session()
 
     def fetch(self, url=None, download=True, *args, **kwargs):
         """
@@ -244,112 +197,8 @@ class Webpage(object):
                 self.html = response.read()
         self.parse(*args, **kwargs)
 
-    def parse(self, selector_string=None, selector_method_name="xpath"):
-        """
-        Parse html from self.html and store the retrieved content.
-
-        If selector parameters are given, parsing is handled in two steps.
-        - First only relevant elements are selected from the parsed tree.
-        - Last the resulting elements are parsed for tags and attributes.
-        This way only sections of a page are parsed (e.g. only elements that
-        fall within a <div> tag pair).
-
-        :param selector_string: for example ".//a" for a hyperlink.
-        :param selector_method_name: either 'xpath' or 'cssselect'
-        """
+    def parse(self, *args, **kwargs):
         self.base_tree = self.parser(self.html)
-        self.trees = [self.base_tree]
-        if selector_string:
-            self.trees = self._fetch_by_method(
-                selector_string, selector_method_name)
-        parse_iterator = ((self._get_attr(y), y.tag) for x in self.trees
-                          for y in x.iter() if y.tag in self.tag)
-        self.content = self.parse_edit(parse_iterator)
-        if self.one_tag:
-            tag = self.tag[0]
-            content = [x[0] for x in self.content]
-            self._set_content(tag, content)
-        elif self.split_content:
-            for tag in self.tag:
-                content = [x[0] for x in self.content if x[1] == tag]
-                self._set_content(tag, content)
-
-    def _set_content(self, tag, content):
-        """
-        Stores the tag content under the given name (self.name; see class
-        description of self.name for alternative naming).
-        """
-        try:
-            setattr(self, self.name[tag], content)
-        except (TypeError, IndexError):
-            try:
-                setattr(self, self.attr[tag], content)
-            except (TypeError, IndexError):
-                setattr(self, tag, content)
-
-    def parse_edit(self, iterator):
-        """
-        Optionally overwrite by a child class to adapt parsed elements.
-
-        :param iterator: the iterator received from the parse method.
-        :return: the result should be a list of strings.
-        """
-        return list(iterator)
-
-    def _fetch_by_method(self, selector_string, selector_method_name):
-        """
-        Cuts up a self.trees into smaller bits by selector parameters.
-
-        If selector parameters are given, parsing is handled in two steps.
-        - First only relevant elements are selected from the parsed tree.
-        - Last the resulting elements are parsed for tags and attributes.
-        This way only sections of a page are parsed (e.g. only elements that
-        fall within a <div> tag pair).
-
-        :param selector_string: for example ".//a" for a hyperlink.
-        :param selector_method_name: either 'xpath' or 'cssselect'
-        :return: a list of lxml elementtrees.
-        """
-        return self.trees[0][selector_method_name](selector_string)
-
-    def _get_attr(self, element):
-        """
-        Try to get attribute value or text from element.
-
-        If this fails returns ""
-
-        :param element: element to be parsed.
-        :param index: tag index in self.attr
-        :return: Returns attribute value or all underlying text of an element.
-        """
-        try:
-            return element.attrib[self.attr[element.tag]]
-        except TypeError:
-            return self._textwalk(element)
-        except KeyError:
-            return ""
-
-    def _textwalk(self, element):
-        """
-        Get all text from element and all child elements recursively.
-
-        :param element: element to be parsed.
-        :return: all text from element and underlying children
-        """
-        children = [self._textwalk(x) + stringify(x.tail) for x in element]
-        return stringify(element.text) + "".join(children)
-
-    def find_in_head(self, attr):
-        """
-        Finds attribute in self.head.
-
-        :param attr: head attribute name
-        :return: head attribute or None when the attribute does not exist.
-        """
-        try:
-            return getattr(self.head, attr)
-        except:
-            return None
 
     def store(self):
         """
@@ -383,7 +232,18 @@ class Webpage(object):
         """
         with self.database_lock:
             return self.session.query(model.Webpage).filter_by(
-                url=self.url).one()
+                url=self.url).all()
+
+    @property
+    def last_webpage_entry(self):
+        return self.webpage_entry[-1]
+
+    @property
+    def webpage_created(self):
+        try:
+            return self.webpage_entry[0].crawl_created
+        except (AttributeError, IndexError, NoResultFound):
+            return dt.now()
 
     def store_page(self):
         """
@@ -391,27 +251,46 @@ class Webpage(object):
         """
         with self.database_lock:
             datetimenow = dt.now()
-            pub_timestring = self.find_in_head("time")
-            if pub_timestring:
-                published_time = dtparser.parse(pub_timestring, dayfirst=True)
-            else:
-                published_time = None
+            times = {"published_time": None, "modified_time": None,
+                     "expiration_time": None}
+            for time in times.keys():
+                timestr = self.find_in_head(time)
+                if timestr:
+                    times[time] = dtparser.parse(timestr, dayfirst=True)
             head_item = model.Webpage(
-                crawl_datetime=datetimenow,
+                content=self.html,
+                crawl_created=self.webpage_created,
+                crawl_modified=datetimenow,
                 url=self.url,
+                revisit=self.find_in_head("revisit_after"),
+                published_time=times['published_time'],
+                modified_time=times["modified_time"],
+                expiration_time=times["expiration_time"],
                 title=self.find_in_head("title"),
                 description=self.find_in_head("description"),
                 author=self.find_in_head("author"),
-                published_time=published_time,
-                expiration_time=self.find_in_head("expiration_time"),
                 section=self.find_in_head("section"),
-                tag=self.find_in_head("tag"),
-                keywords=self.find_in_head("keywords"),
+                tag=self.find_in_head("article_tag"),
+                keywords=self.find_in_head("keywords")
             )
             website = self.website_entry
+            website.modified = datetimenow
             website.webpages.append(head_item)
             self.store_model(item=website)
             logger.debug('Webpage entry added: {}'.format(self.url))
+
+
+    def find_in_head(self, attr):
+        """
+        Finds attribute in self.head.
+
+        :param attr: head attribute name
+        :return: head attribute or None when the attribute does not exist.
+        """
+        try:
+            return getattr(self.head, attr)
+        except:
+            return None
 
     @property
     def agent(self):
@@ -449,7 +328,153 @@ class Webpage(object):
                        self.robot_archive_options)
 
 
-class Empty(Webpage):
+class Webpage(WebpageRaw):
+    """
+    Fetches content from an [url] and parses its contents on initialisation.
+
+    This is a base class that can be inherited. Minimally one should overwrite
+    the tag and name values. Children can set the following attributes:
+
+    :param tag: sought tag(s) can be a list of strings or a string.
+    :param name: the name (string) or list of names (this should correspond
+        with self.tag, except if None is given) under which the tag should be
+        stored in the Webpage object during parsing. If None is given, if it
+        exists (not None) the attribute name (self.attr[i]) at the right index
+        is used or else  the tag name (self.tag[i]) at the right index is taken
+        as a name.
+    :param attr: sought attribute(s) can be a list of strings or a string. The
+        chosen form must correspond with self.tag.
+    :param split_content: if True saves content as attributes to self else
+        content is only stored as 'content'.
+    :param head: if True is given a metadata from the head will be stored in
+        this attribute.
+    :param robot_archive_options: website will not be archived if any of these
+        is matched by attribute values from the robots metadata attribute in
+        the head-section of a website.
+    :param parser: HTML or XML lxml parser (etree.XML or etree.HTML).
+    """
+    tag = ""
+    name = []
+    attr = []
+    split_content = True
+    one_tag = False
+
+    def __init__(self, url, html=None, base_url=None, database_lock=None,
+                 *args, **kwargs):
+        """
+        Fetch all content from a site and parse it.
+
+        Apart from the arguments described below, extra arguments and key-value
+        pairs will be handed over to the fetch method and from that rest
+        arguments are handed over to the parse method. View those methods for
+        the extra possible parameters.
+
+        :param url: the http-address of the website that is to be parsed.
+        :param html: (optional) in case the content of a site is allready
+            obtained, this can be given in html.
+        :param base_url: (optional) the base url that belongs to this url.
+        """
+        if not isinstance(self.tag, list):
+            self.tag = [self.tag]
+        if not isinstance(self.name, list):
+            self.name = [self.name]
+        if not isinstance(self.attr, list):
+            self.attr = [self.attr]
+            self.one_tag = True
+        super().__init__(url, html, base_url, database_lock, *args,
+                         **kwargs)
+
+    def parse(self, selector_string=None, selector_method_name="xpath"):
+        """
+        Parse html from self.html and store the retrieved content.
+
+        If selector parameters are given, parsing is handled in two steps.
+        - First only relevant elements are selected from the parsed tree.
+        - Last the resulting elements are parsed for tags and attributes.
+        This way only sections of a page are parsed (e.g. only elements that
+        fall within a <div> tag pair).
+
+        :param selector_string: for example ".//a" for a hyperlink.
+        :param selector_method_name: either 'xpath' or 'cssselect'
+        """
+        super().parse()
+        self.trees = [self.base_tree]
+        if selector_string:
+            self.trees = self._fetch_by_method(
+                selector_string, selector_method_name)
+        for i, t in enumerate(self.tag):
+            content = [self._get_attr(y, i) for x in self.trees for y
+                              in x.iter() if y.tag == t]
+            self._set_content(i, t, content)
+        self.parse_edit()
+
+    def _set_content(self, i, tag, content):
+        """
+        Stores the tag content under the given name (self.name; see class
+        description of self.name for alternative naming).
+        """
+        try:
+            setattr(self, self.name[i], content)
+        except (TypeError, IndexError):
+            try:
+                setattr(self, self.attr[i], content)
+            except (TypeError, IndexError):
+                setattr(self, tag, content)
+
+    def parse_edit(self):
+        """
+        Optionally overwrite by a child class to adapt parsed elements.
+
+        :param iterator: the iterator received from the parse method.
+        :return: the result should be a list of strings.
+        """
+        pass
+
+    def _fetch_by_method(self, selector_string, selector_method_name):
+        """
+        Cuts up a self.trees into smaller bits by selector parameters.
+
+        If selector parameters are given, parsing is handled in two steps.
+        - First only relevant elements are selected from the parsed tree.
+        - Last the resulting elements are parsed for tags and attributes.
+        This way only sections of a page are parsed (e.g. only elements that
+        fall within a <div> tag pair).
+
+        :param selector_string: for example ".//a" for a hyperlink.
+        :param selector_method_name: either 'xpath' or 'cssselect'
+        :return: a list of lxml elementtrees.
+        """
+        return self.trees[0][selector_method_name](selector_string)
+
+    def _get_attr(self, element, i):
+        """
+        Try to get attribute value or text from element.
+
+        If this fails returns ""
+
+        :param element: element to be parsed.
+        :param index: tag index in self.attr
+        :return: Returns attribute value or all underlying text of an element.
+        """
+        try:
+            return element.attrib[self.attr[i]]
+        except (TypeError, IndexError):
+            return self._textwalk(element)
+        except KeyError:
+            return ""
+
+    def _textwalk(self, element):
+        """
+        Get all text from element and all child elements recursively.
+
+        :param element: element to be parsed.
+        :return: all text from element and underlying children
+        """
+        children = [self._textwalk(x) + stringify(x.tail) for x in element]
+        return stringify(element.text) + "".join(children)
+
+
+class Empty(WebpageRaw):
     """
     Empty webpage class that can serve as a dummy class for Crawler.
     Using this, the crawler will work in its purest form: only harvesting
@@ -476,7 +501,7 @@ class Text(Webpage):
                                 for txt in self.text] if x != ""]
             logger.debug("storing {} paragraphs".format(len(text)))
             self.store_page()
-            webpage = self.webpage_entry
+            webpage = self.last_webpage_entry
             for paragraph in text:
                 new_item = model.Paragraph(
                     paragraph=paragraph,
@@ -490,7 +515,7 @@ class HeadingText(Webpage):
     paragraph_tags = ['p', 'li']
     heading_tags = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']
     tag = ['p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']
-    name = [None] * 6
+    name = ['p', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']
     split_content = False
 
     def store(self):
@@ -498,38 +523,47 @@ class HeadingText(Webpage):
         Stores paragraphs, headings and header metadata to database.
         """
         with self.database_lock:
-            logger.debug(self.url)
             logger.debug(
-                "storing {} paragraphs and headings".format(len(self.content)))
+                "Storing {} paragraphs and headings for {}".format(
+                    sum([len(getattr(self, x, [])) for x in
+                        self.paragraph_tags]),
+                    self.url
+                )
+            )
             self.store_page()
             previous_headings = {h: None for h in self.heading_tags}
-            webpage = self.webpage_entry
+            webpage = self.last_webpage_entry
             first_heading = True
             heading = None
-            for item, tag in self.content:
-                item = item.strip(' \t\n\r')
-                if item == "":
+            for tag in self.paragraph_tags:
+                try:
+                    elements = getattr(self, tag)
+                except AttributeError:
                     continue
-                if tag in self.paragraph_tags and not first_heading:
-                    new_paragraph = model.Paragraph(
-                        paragraph=item,
-                    )
-                    heading.paragraphs.append(new_paragraph)
-                    webpage.paragraphs.append(new_paragraph)
-                else:
-                    if not first_heading:
-                        webpage.headings.append(heading)
+                for item in elements:
+                    item = item.strip(' \t\n\r')
+                    if item == "":
+                        continue
+                    if tag in self.paragraph_tags and not first_heading:
+                        new_paragraph = model.Paragraph(
+                            paragraph=item,
+                        )
+                        heading.paragraphs.append(new_paragraph)
+                        webpage.paragraphs.append(new_paragraph)
                     else:
-                        first_heading = False
-                    previous_headings[tag] = item
-                    heading = model.Heading(
-                        h1=previous_headings['h1'],
-                        h2=previous_headings['h2'],
-                        h3=previous_headings['h3'],
-                        h4=previous_headings['h4'],
-                        h5=previous_headings['h5'],
-                        h6=previous_headings['h6'],
-                    )
+                        if not first_heading:
+                            webpage.headings.append(heading)
+                        else:
+                            first_heading = False
+                        previous_headings[tag] = item
+                        heading = model.Heading(
+                            h1=previous_headings['h1'],
+                            h2=previous_headings['h2'],
+                            h3=previous_headings['h3'],
+                            h4=previous_headings['h4'],
+                            h5=previous_headings['h5'],
+                            h6=previous_headings['h6']
+                        )
             self.store_model(item=webpage)
             logger.debug('Stored paragraphs and headings for: ' + self.url)
 
@@ -538,16 +572,14 @@ class Links(Webpage):
     """
     Fetches content from webpage by url and returns its hyperlinks.
     """
-    tag = "a"
-    attr = "href"
-    name = "links"
+    tag = ["a", "a"]
+    attr = ["href", "rel"]
+    name = ["links", "robots"]
 
-    def parse_edit(self, iterator):
+    def parse_edit(self):
         """
-        When parsing, validate url.
-
-        :param iterator: list of urls to validate
-        :return: list of valid urls
+        When parsing, validate url. And check links for nofollow.
         """
-        iterator = list(iterator)
-        return [link for link in iterator if validate.url(link[0])]
+        robot_nofollow = self.robot_archive_options + ['nofollow']
+        self.links = [link for i, link in enumerate(self.links) if validate.url(
+            link) and not self.robots[i] in robot_nofollow]
