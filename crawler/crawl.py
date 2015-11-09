@@ -10,6 +10,8 @@ import time
 import urllib.error
 import urllib.parse
 
+import dateutil.parser
+
 from settings import *
 import crawler.validate as validate
 import crawler.model as model
@@ -237,6 +239,7 @@ class Website(object):
             self.database_lock = threading.RLock()
         else:
             self.database_lock = database_lock
+        self.session = model.Session()
         self.base = base
         self.has_content = True
         self.robot_txt = robot.Txt(urllib.parse.urljoin(base, 'robots.txt'))
@@ -249,8 +252,23 @@ class Website(object):
         self.links = link_queue
         self.depth = depth
         try:
-            for link in self.robot_txt.sitemap.links:
-                self.links.put(link)
+            for i, link in enumerate(self.robot_txt.sitemap.links):
+                if self.robot_txt.sitemap.xml:
+                    try:
+                        site = self.session.query(model.Webpage).filter_by(
+                            url=link).order_by(
+                            model.Webpage.crawl_modified).all()[-1]
+                        modified = dateutil.parser.parse(
+                            self.robot_txt.sitemap.modified_time[i])
+                        if site.crawl_modified > modified:
+                            with base_url.lock:
+                                self.links.put(link)
+                    except IndexError:
+                        with base_url.lock:
+                            self.links.put(link)
+                else:
+                    with base_url.lock:
+                        self.links.put(link)
             with base_url.lock:
                 historic_links += self.robot_txt.sitemap.links
         except AttributeError:

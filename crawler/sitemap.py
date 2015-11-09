@@ -15,6 +15,8 @@ class SitemapMixin(object):
     """
     Adds a list of visited urls, addition and iteration functionality.
     """
+    xml = False
+
     def __init__(self, url, html=None, base_url=None):
         super().__init__(url, html=html, base_url=base_url)
         self.visited = []
@@ -55,9 +57,10 @@ class Xml(SitemapMixin, webpage.Webpage):
     """
     Parses XML sitemaps.
     """
-    tag = "loc"
-    name = "links"
+    tag = ["loc", "lastmod", "changefreq"]
+    name = ["links", "modified_time", "revisit"]
     parser = etree.XML
+    xml = True
 
 
 class Zip(Xml):

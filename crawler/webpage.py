@@ -232,7 +232,7 @@ class WebpageRaw(object):
         """
         with self.database_lock:
             return self.session.query(model.Webpage).filter_by(
-                url=self.url).all()
+                url=self.url).order_by(model.Webpage.crawl_modified).all()
 
     @property
     def last_webpage_entry(self):
