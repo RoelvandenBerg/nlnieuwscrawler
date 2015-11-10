@@ -27,6 +27,27 @@ print_logger.setLevel(logging.DEBUG)
 logger.addHandler(print_logger)
 logger.debug("NEW_CRAWL_RUN | " + dt.now().strftime('%H:%M | %d-%m-%Y |'))
 
+ENCODINGS = ['utf_8', 'latin_1', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32',
+             'utf_32_be', 'utf_32_le', 'utf_7', 'base64_codec', 'big5',
+             'big5hkscs', 'bz2_codec', 'cp037', 'cp1026', 'cp1125', 'cp1140',
+             'cp1250', 'cp1251', 'cp1252', 'cp1253', 'cp1254', 'cp1255',
+             'cp1256', 'cp1257', 'cp1258', 'cp273', 'cp424', 'cp437',
+             'cp500',  'cp775', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858',
+             'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866',
+             'cp869', 'cp932', 'cp949', 'cp950', 'euc_jis_2004', 'euc_jisx0213',
+             'euc_jp', 'euc_kr', 'gb18030', 'gb2312', 'gbk', 'hex_codec',
+             'hp_roman8', 'hz', 'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2',
+             'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr',
+             'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14',
+             'iso8859_15', 'iso8859_16', 'iso8859_2', 'iso8859_3', 'iso8859_4',
+             'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9',
+             'johab', 'koi8_r', 'mac_cyrillic', 'mac_greek', 'mac_iceland',
+             'mac_latin2', 'mac_roman', 'mac_turkish', 'mbcs', 'ptcp154',
+             'quopri_codec', 'rot_13', 'shift_jis', 'shift_jis_2004',
+             'shift_jisx0213', 'tactis', 'tis_620', 'uu_codec', 'zlib_codec',
+             'ascii']
+
+ENCODINGS = list(reversed(ENCODINGS))
 
 class BaseUrl(list):
     """
@@ -235,6 +256,7 @@ class Website(object):
         :param base_url: BaseUrl object that at least contains this website.
         :param depth: crawl depth of this website.
         """
+        self.encoding = ENCODINGS[:]
         if not database_lock:
             self.database_lock = threading.RLock()
         else:
@@ -306,15 +328,24 @@ class Website(object):
             logger.debug('WEBSITE: webpage {} cannot be fetched.'
                          .format(link))
             return
-        try:
-            page = self.webpage(
-                url=link,
-                base_url=self.base,
-                database_lock=self.database_lock
-            )
-        except (urllib.error.HTTPError, UnicodeEncodeError):
-            logger.debug('WEBSITE: HTTP error @ {}'.format(link))
-            return
+        while True:
+            try:
+                page = self.webpage(
+                    url=link,
+                    base_url=self.base,
+                    database_lock=self.database_lock,
+                    encoding=self.encoding[0]
+                )
+            except urllib.error.HTTPError:
+                logger.debug('WEBSITE: HTTP error @ {}'.format(link))
+                return
+            except UnicodeDecodeError:
+                self.encoding.pop()
+                time.sleep(CRAWL_DELAY)
+                continue
+            break
+        if page.encoding != self.encoding[0]:
+            self.encoding.append(page.encoding)
         if page.followable:
             urlfetcher = webpage.Links(url=link, base_url=self.base,
                                       html=page.html, download=False)

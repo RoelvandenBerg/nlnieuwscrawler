@@ -147,7 +147,7 @@ class WebpageRaw(object):
     parser = etree.HTML
 
     def __init__(self, url, html=None, base_url=None, database_lock=None,
-                 *args, **kwargs):
+                 encoding='utf-8', *args, **kwargs):
         """
         Fetch all content from a site and store it in text format.
 
@@ -169,6 +169,7 @@ class WebpageRaw(object):
             self.base_url = url
         self.html = html
         self.url = url
+        self.encoding = encoding
         self.session = model.Session()
         self.fetch(*args, **kwargs)
         if self.head:
@@ -194,7 +195,10 @@ class WebpageRaw(object):
             data, header = self.agent
             with request.urlopen(request.Request(url, headers=header)) \
                     as response:
-                self.html = response.read()
+                encoding = response.headers.get_content_charset()
+                if encoding:
+                    self.encoding = encoding
+                self.html = response.read().decode(self.encoding)
         self.parse(*args, **kwargs)
 
     def parse(self, *args, **kwargs):
