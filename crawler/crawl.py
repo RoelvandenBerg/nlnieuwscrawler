@@ -13,10 +13,10 @@ import urllib.parse
 import dateutil.parser
 
 from settings import *
-import crawler.validate as validate
-import crawler.model as model
-import crawler.robot as robot
-import crawler.webpage as webpage
+import validate
+import model
+import robot
+import webpage
 
 
 # setup logger
