@@ -10,7 +10,9 @@ import time
 import urllib.error
 import urllib.parse
 
-from settings import *
+import dateutil.parser
+
+from crawler.settings import *
 import crawler.validate as validate
 import crawler.model as model
 import crawler.robot as robot
@@ -25,6 +27,27 @@ print_logger.setLevel(logging.DEBUG)
 logger.addHandler(print_logger)
 logger.debug("NEW_CRAWL_RUN | " + dt.now().strftime('%H:%M | %d-%m-%Y |'))
 
+ENCODINGS = ['utf_8', 'latin_1', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32',
+             'utf_32_be', 'utf_32_le', 'utf_7', 'base64_codec', 'big5',
+             'big5hkscs', 'bz2_codec', 'cp037', 'cp1026', 'cp1125', 'cp1140',
+             'cp1250', 'cp1251', 'cp1252', 'cp1253', 'cp1254', 'cp1255',
+             'cp1256', 'cp1257', 'cp1258', 'cp273', 'cp424', 'cp437',
+             'cp500',  'cp775', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858',
+             'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866',
+             'cp869', 'cp932', 'cp949', 'cp950', 'euc_jis_2004', 'euc_jisx0213',
+             'euc_jp', 'euc_kr', 'gb18030', 'gb2312', 'gbk', 'hex_codec',
+             'hp_roman8', 'hz', 'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2',
+             'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr',
+             'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14',
+             'iso8859_15', 'iso8859_16', 'iso8859_2', 'iso8859_3', 'iso8859_4',
+             'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9',
+             'johab', 'koi8_r', 'mac_cyrillic', 'mac_greek', 'mac_iceland',
+             'mac_latin2', 'mac_roman', 'mac_turkish', 'mbcs', 'ptcp154',
+             'quopri_codec', 'rot_13', 'shift_jis', 'shift_jis_2004',
+             'shift_jisx0213', 'tactis', 'tis_620', 'uu_codec', 'zlib_codec',
+             'ascii']
+
+ENCODINGS = list(reversed(ENCODINGS))
 
 class BaseUrl(list):
     """
@@ -233,14 +256,21 @@ class Website(object):
         :param base_url: BaseUrl object that at least contains this website.
         :param depth: crawl depth of this website.
         """
+        self.encoding = ENCODINGS[:]
         if not database_lock:
             self.database_lock = threading.RLock()
         else:
             self.database_lock = database_lock
+        self.session = model.Session()
         self.base = base
         self.has_content = True
         self.robot_txt = robot.Txt(urllib.parse.urljoin(base, 'robots.txt'))
         self.robot_txt.read()
+        try:
+            logger.debug('NUMBER OF SITEMAPS FOR ' + self.base + ' :  ' + str(
+                len(self.robot_txt.sitemap.links)))
+        except:
+            logger.debug('NUMBER OF SITEMAPS FOR ' + self.base + ' :  None')
         if base_url:
             self.base_url = base_url
         else:
@@ -249,12 +279,27 @@ class Website(object):
         self.links = link_queue
         self.depth = depth
         try:
-            for link in self.robot_txt.sitemap.links:
-                self.links.put(link)
+            for i, link in enumerate(self.robot_txt.sitemap.links):
+                if self.robot_txt.sitemap.xml:
+                    try:
+                        site = self.session.query(model.Webpage).filter_by(
+                            url=link).order_by(
+                            model.Webpage.crawl_modified).all()[-1]
+                        modified = dateutil.parser.parse(
+                            self.robot_txt.sitemap.modified_time[i])
+                        if site.crawl_modified > modified:
+                            with base_url.lock:
+                                self.links.put(link)
+                    except IndexError:
+                        with base_url.lock:
+                            self.links.put(link)
+                else:
+                    with base_url.lock:
+                        self.links.put(link)
             with base_url.lock:
                 historic_links += self.robot_txt.sitemap.links
         except AttributeError:
-            pass
+            logger.debug('SITEMAP NOT FOUND FOR: ' + self.base)
         self.webpage = page
 
     def _can_fetch(self, url_):
@@ -274,10 +319,9 @@ class Website(object):
             except queue.Empty:
                 self.has_content = False
             try:
-                time.sleep(
-                    self.robot_txt.crawl_delay + start_time - time.time())
-            except:    # ONTZETTENDE HACK
-                logger.debug('crawl.Website.run sleep hack is used!')
+                time.sleep(self.robot_txt.crawl_delay + start_time - time.time())
+            except ValueError:
+                pass
 
     def _run_once(self):
         """Runs one webpage of a website crawler."""
@@ -288,15 +332,24 @@ class Website(object):
             logger.debug('WEBSITE: webpage {} cannot be fetched.'
                          .format(link))
             return
-        try:
-            page = self.webpage(
-                url=link,
-                base_url=self.base,
-                database_lock=self.database_lock
-            )
-        except (urllib.error.HTTPError, UnicodeEncodeError):
-            logger.debug('WEBSITE: HTTP error @ {}'.format(link))
-            return
+        while True:
+            try:
+                page = self.webpage(
+                    url=link,
+                    base_url=self.base,
+                    database_lock=self.database_lock,
+                    encoding=self.encoding[0]
+                )
+            except urllib.error.HTTPError:
+                logger.debug('WEBSITE: HTTP error @ {}'.format(link))
+                return
+            except UnicodeDecodeError:
+                self.encoding.pop()
+                time.sleep(CRAWL_DELAY)
+                continue
+            break
+        if page.encoding != self.encoding[0]:
+            self.encoding.append(page.encoding)
         if page.followable:
             urlfetcher = webpage.Links(url=link, base_url=self.base,
                                       html=page.html, download=False)
@@ -377,5 +430,5 @@ class Crawler(object):
 
 
 if __name__ == "__main__":
-    standalone_crawler = Crawler(SITES, webpage.HeadingText)
+    standalone_crawler = Crawler(SITES)
     standalone_crawler.run()
