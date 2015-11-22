@@ -5,8 +5,8 @@ import logging
 import urllib.parse
 import urllib.robotparser as robotparser
 
-from crawler.settings import CRAWL_DELAY
-import crawler.sitemap as sitemap
+from settings import CRAWL_DELAY
+import sitemap
 
 
 # setup logger

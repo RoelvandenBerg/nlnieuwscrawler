@@ -10,8 +10,8 @@ from zipfile import ZipFile
 
 import lxml.etree as etree
 
-import crawler.webpage as webpage
-import crawler.validate as validate
+import webpage
+import validate
 
 # setup logger
 logger = logging.getLogger(__name__)

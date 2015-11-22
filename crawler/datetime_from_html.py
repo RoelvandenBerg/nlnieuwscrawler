@@ -5,7 +5,7 @@ import re
 import dateutil.parser
 from lxml import etree
 
-from crawler.settings import DATE_TIME_DISTANCE
+from settings import DATE_TIME_DISTANCE
 
 MONTHS = {
     'januari': 1,
