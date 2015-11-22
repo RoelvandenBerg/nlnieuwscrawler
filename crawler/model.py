@@ -34,10 +34,10 @@ class Webpage(Base):
     __tablename__ = 'webpages'
     id = Column(Integer, primary_key=True)
     website_id = Column(Integer, ForeignKey('websites.id'))
-    content = Column(String)
+    url = Column(String)
     crawl_created = Column(DateTime)
     crawl_modified = Column(DateTime)
-    url = Column(String)
+    content = Column(String)
     paragraphs = relationship("Paragraph", backref='webpages')
     headings = relationship("Heading", backref='webpages')
     revisit = Column(String)

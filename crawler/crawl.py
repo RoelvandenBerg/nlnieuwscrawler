@@ -12,11 +12,11 @@ import urllib.parse
 
 import dateutil.parser
 
-from settings import *
-import validate
-import model
-import robot
-import webpage
+from crawler.settings import *
+import crawler.validate as validate
+import crawler.model as model
+import crawler.robot as robot
+import crawler.webpage as webpage
 
 
 # setup logger
@@ -266,6 +266,11 @@ class Website(object):
         self.has_content = True
         self.robot_txt = robot.Txt(urllib.parse.urljoin(base, 'robots.txt'))
         self.robot_txt.read()
+        try:
+            logger.debug('NUMBER OF SITEMAPS FOR ' + self.base + ' :  ' + str(
+                len(self.robot_txt.sitemap.links)))
+        except:
+            logger.debug('NUMBER OF SITEMAPS FOR ' + self.base + ' :  None')
         if base_url:
             self.base_url = base_url
         else:
@@ -294,7 +299,7 @@ class Website(object):
             with base_url.lock:
                 historic_links += self.robot_txt.sitemap.links
         except AttributeError:
-            pass
+            logger.debug('SITEMAP NOT FOUND FOR: ' + self.base)
         self.webpage = page
 
     def _can_fetch(self, url_):
@@ -314,10 +319,9 @@ class Website(object):
             except queue.Empty:
                 self.has_content = False
             try:
-                time.sleep(
-                    self.robot_txt.crawl_delay + start_time - time.time())
-            except:    # ONTZETTENDE HACK
-                logger.debug('crawl.Website.run sleep hack is used!')
+                time.sleep(self.robot_txt.crawl_delay + start_time - time.time())
+            except ValueError:
+                pass
 
     def _run_once(self):
         """Runs one webpage of a website crawler."""
@@ -426,5 +430,5 @@ class Crawler(object):
 
 
 if __name__ == "__main__":
-    standalone_crawler = Crawler(SITES, webpage.HeadingText)
+    standalone_crawler = Crawler(SITES)
     standalone_crawler.run()

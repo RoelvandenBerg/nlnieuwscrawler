@@ -77,7 +77,7 @@ SITES = [
     'http://www.destentor.nl',
     'http://www.dutchnews.nl',
     'http://www.dvhn.nl',
-    'http://www.earth-matters.nl',
+    # 'http://www.earth-matters.nl',
     'http://www.ed.nl',
     'http://www.edestad.nl',
     'http://www.elsevier.nl',

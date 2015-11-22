@@ -11,9 +11,9 @@ import urllib.request as request
 from lxml import etree
 from sqlalchemy.orm.exc import NoResultFound
 
-import model
-from settings import USER_AGENT_INFO, USER_AGENT
-import validate
+import crawler.model as model
+from crawler.settings import USER_AGENT_INFO, USER_AGENT
+import crawler.validate as validate
 
 # setup logger
 logger = logging.getLogger(__name__)
@@ -198,7 +198,8 @@ class WebpageRaw(object):
                 encoding = response.headers.get_content_charset()
                 if encoding:
                     self.encoding = encoding
-                self.html = response.read().decode(self.encoding)
+                self.html = response.read().decode(self.encoding).encode(
+                    'utf-8')
         self.parse(*args, **kwargs)
 
     def parse(self, *args, **kwargs):
@@ -362,6 +363,8 @@ class Webpage(WebpageRaw):
     attr = []
     split_content = True
     one_tag = False
+    selector_string = None
+    selector_method_name = "xpath"
 
     def __init__(self, url, html=None, base_url=None, database_lock=None,
                  *args, **kwargs):
@@ -388,7 +391,7 @@ class Webpage(WebpageRaw):
         super().__init__(url, html, base_url, database_lock, *args,
                          **kwargs)
 
-    def parse(self, selector_string=None, selector_method_name="xpath"):
+    def parse(self):
         """
         Parse html from self.html and store the retrieved content.
 
@@ -403,12 +406,13 @@ class Webpage(WebpageRaw):
         """
         super().parse()
         self.trees = [self.base_tree]
-        if selector_string:
-            self.trees = self._fetch_by_method(
-                selector_string, selector_method_name)
+        if self.selector_string:
+            self.trees = self._fetch_by_method()
         for i, t in enumerate(self.tag):
-            content = [self._get_attr(y, i) for x in self.trees for y
-                              in x.iter() if y.tag == t]
+            content = [self._get_attr(y, i) for x in self.trees for y in
+                       x.iter() if y.tag == t]
+            logger.debug(t + ' with name ' + self.name[i] + ' with number: ' +
+                         str(i) + ' and lenght: ' + str(len(content)))
             self._set_content(i, t, content)
         self.parse_edit()
 
@@ -434,7 +438,7 @@ class Webpage(WebpageRaw):
         """
         pass
 
-    def _fetch_by_method(self, selector_string, selector_method_name):
+    def _fetch_by_method(self):
         """
         Cuts up a self.trees into smaller bits by selector parameters.
 
@@ -448,7 +452,9 @@ class Webpage(WebpageRaw):
         :param selector_method_name: either 'xpath' or 'cssselect'
         :return: a list of lxml elementtrees.
         """
-        return self.trees[0][selector_method_name](selector_string)
+        selection = getattr(self.trees[0], self.selector_method_name)(
+            self.selector_string)
+        return selection
 
     def _get_attr(self, element, i):
         """
