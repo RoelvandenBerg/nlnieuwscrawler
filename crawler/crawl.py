@@ -319,9 +319,14 @@ class Website(object):
             except queue.Empty:
                 self.has_content = False
             try:
-                time.sleep(self.robot_txt.crawl_delay + start_time - time.time())
-            except ValueError:
-                pass
+                wait_time_left = self.robot_txt.crawl_delay + start_time - \
+                             time.time()
+                time.sleep(wait_time_left)
+            except (ValueError, IOError):
+                wait_time_left = 1
+                while wait_time_left > 0:
+                    wait_time_left = self.robot_txt.crawl_delay + start_time - \
+                             time.time()
 
     def _run_once(self):
         """Runs one webpage of a website crawler."""
