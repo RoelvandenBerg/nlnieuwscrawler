@@ -11,9 +11,15 @@ import urllib.request as request
 from lxml import etree
 from sqlalchemy.orm.exc import NoResultFound
 
-import model
-from settings import USER_AGENT_INFO, USER_AGENT
-import validate
+try:
+    import model
+    from settings import USER_AGENT_INFO, USER_AGENT
+    import validate
+except ImportError:
+    import crawler.model as model
+    from crawler.settings import USER_AGENT_INFO, USER_AGENT
+    import crawler.validate as validate
+
 
 # setup logger
 logger = logging.getLogger(__name__)
@@ -198,8 +204,9 @@ class WebpageRaw(object):
                 encoding = response.headers.get_content_charset()
                 if encoding:
                     self.encoding = encoding
-                self.html = response.read().decode(self.encoding).encode(
-                    'utf-8')
+                content = response.read()
+                self.html = content.decode(self.encoding).encode(
+                    'utf-8')    
         self.parse(*args, **kwargs)
 
     def parse(self, *args, **kwargs):

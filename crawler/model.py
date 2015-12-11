@@ -11,7 +11,10 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import sessionmaker
 
-from settings import *
+try:
+    from settings import *
+except ImportError:
+    from crawler.settings import *
 
 engine = create_engine('sqlite:///' + DATABASE_FILENAME, echo=VERBOSE)
 

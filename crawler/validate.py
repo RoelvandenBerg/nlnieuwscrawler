@@ -3,7 +3,10 @@ __author__ = 'roelvdberg@gmail.com'
 
 import re
 
-from settings import NOFOLLOW
+try:
+    from settings import NOFOLLOW
+except ImportError:
+    from crawler.settings import NOFOLLOW
 
 
 # Regex taken from Django:

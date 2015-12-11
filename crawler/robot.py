@@ -5,8 +5,13 @@ import logging
 import urllib.parse
 import urllib.robotparser as robotparser
 
-from settings import CRAWL_DELAY
-import sitemap
+
+try:
+    from settings import CRAWL_DELAY
+    import sitemap
+except ImportError:
+    from crawler.settings import CRAWL_DELAY
+    import crawler.sitemap as sitemap
 
 
 # setup logger
@@ -26,7 +31,7 @@ class Txt(robotparser.RobotFileParser):
     """
 
     def __init__(self, url):
-        self.sitemap = None
+        self.sitemap = False
         self.crawl_delay = CRAWL_DELAY
         super().__init__(url)
 
@@ -81,9 +86,13 @@ class Txt(robotparser.RobotFileParser):
                                                                     True))
                         state = 2
                 elif line[0] == 'sitemap':
+                    print(line)
                     sitemap_url = line[1]
+                    print('hallo')
                     sitemap_ = sitemap.Sitemap(sitemap_url, self.url.strip('/robots.txt'))
+                    print('sitemap_')
                     self.sitemap = sitemap_.sitemap
+                    print(self.sitemap.links)
                 elif line[0].lower().startswith('crawl-delay'):
                     new_delay = float(line[1])
                     if self.crawl_delay < new_delay:

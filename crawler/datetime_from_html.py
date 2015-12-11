@@ -5,7 +5,10 @@ import re
 import dateutil.parser
 from lxml import etree
 
-from settings import DATE_TIME_DISTANCE
+try:
+    from settings import DATE_TIME_DISTANCE
+except ImportError:
+    from crawler.settings import DATE_TIME_DISTANCE
 
 MONTHS = {
     'januari': 1,

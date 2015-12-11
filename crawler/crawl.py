@@ -12,11 +12,18 @@ import urllib.parse
 
 import dateutil.parser
 
-from settings import *
-import validate
-import model
-import robot
-import webpage
+try:
+    from settings import *
+    import validate
+    import model
+    import robot
+    import webpage
+except ImportError:
+    from crawler.settings import *
+    import crawler.validate as validate
+    import crawler.model as model
+    import crawler.robot as robot
+    import crawler.webpage as webpage
 
 
 # setup logger
@@ -266,11 +273,6 @@ class Website(object):
         self.has_content = True
         self.robot_txt = robot.Txt(urllib.parse.urljoin(base, 'robots.txt'))
         self.robot_txt.read()
-        try:
-            logger.debug('NUMBER OF SITEMAPS FOR ' + self.base + ' :  ' + str(
-                len(self.robot_txt.sitemap.links)))
-        except:
-            logger.debug('NUMBER OF SITEMAPS FOR ' + self.base + ' :  None')
         if base_url:
             self.base_url = base_url
         else:
@@ -279,6 +281,9 @@ class Website(object):
         self.links = link_queue
         self.depth = depth
         try:
+            print('trying to add sitemap')
+            logger.debug('CHECK DIT' + str(self.robot_txt.sitemap.links))
+            print('at least I tried', self.base)
             for i, link in enumerate(self.robot_txt.sitemap.links):
                 if self.robot_txt.sitemap.xml:
                     try:
@@ -432,8 +437,3 @@ class Crawler(object):
         )
         website.run()
         self.websites.append(website)
-
-
-if __name__ == "__main__":
-    standalone_crawler = Crawler(SITES)
-    standalone_crawler.run()
