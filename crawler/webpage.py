@@ -199,6 +199,7 @@ class WebpageRaw(object):
             if url is None:
                 url = self.url
             data, header = self.agent
+            url = validate.iri_to_uri(url)
             with request.urlopen(request.Request(url, headers=header)) \
                     as response:
                 encoding = response.headers.get_content_charset()

@@ -134,7 +134,20 @@ class BaseUrl(list):
             self.session.add(new_item)
             self.session.commit()
 
-    def add(self, url, current_depth, add_to_history=False):
+    def url_belongs_to_base(self, url, base):
+        """
+        Makes sure mobile versions are also attributed to base url.
+        :param url: url of webpage to check
+        :param base: base url for website
+        :return: boolean if url falls within base.
+        """
+        if url.startswith(r'http://m.') or base.startswith(r'http://m.'):
+            url = url.strip(r'http://').strip('m.').strip('www.')
+            base = base.strip(r'http://').strip('m.').strip('www.')
+        return url.startswith(base)
+
+
+    def add(self, url, current_depth, crawl_url=True):
         """
         Adds a url to self.
 
@@ -147,11 +160,11 @@ class BaseUrl(list):
             for i, link_bundle in enumerate(self):
                 for base, link_history, link_queue in link_bundle:
                     # test if url contains base and hasn't been added before
-                    if url.startswith(base):
-                        if not url in link_history:
-                            # link hasn been added before, so store it
+                    if self.url_belongs_to_base(url, base):
+                        if url not in link_history:
+                            # link hasn't been added before, so store it
                             link_history.append(url)
-                            if not add_to_history:
+                            if crawl_url:
                                 link_queue.put(url)
                         return
             # link has not been matched to any of the base urls, so append it
@@ -172,7 +185,7 @@ class BaseUrl(list):
             base = self.base_regex.findall(url)[0] + "/"
             if base not in self[depth] or validate.url_explicit(url):
                 logger.debug('BASE_URL: adding new base @depth {} : {}'
-                    .format(depth, base))
+                             .format(depth, base))
                 link_queue = queue.Queue()
                 link_queue.put(url)
                 historic_links = [url]
@@ -196,6 +209,7 @@ class BaseUrl(list):
         :param depth: depth at which the urls have been harvested
         :param base_url: base at which the urls have been harvested
         """
+        number_o_links = 0
         if not base_url:
             base_url = self.base[0]
         try:
@@ -209,8 +223,14 @@ class BaseUrl(list):
                 if not validate.url_explicit(url_):
                     continue
                 self.add(url_, depth)
+                number_o_links += 1
         except AttributeError:
-            pass
+            logger.debug(
+                'AttributeError while iterating over links @base {}'.format(
+                    number_o_links, base_url)
+            )
+        logger.debug('{} links added @base {} .'.format(
+            number_o_links, base_url))
 
     def __str__(self):
         return "BaseUrl with at depth 0: " + \
@@ -281,30 +301,16 @@ class Website(object):
         self.links = link_queue
         self.depth = depth
         try:
-            print('trying to add sitemap')
-            logger.debug('CHECK DIT' + str(self.robot_txt.sitemap.links))
-            print('at least I tried', self.base)
-            for i, link in enumerate(self.robot_txt.sitemap.links):
-                if self.robot_txt.sitemap.xml:
-                    try:
-                        site = self.session.query(model.Webpage).filter_by(
-                            url=link).order_by(
-                            model.Webpage.crawl_modified).all()[-1]
-                        modified = dateutil.parser.parse(
-                            self.robot_txt.sitemap.modified_time[i])
-                        if site.crawl_modified > modified:
-                            with base_url.lock:
-                                self.links.put(link)
-                    except IndexError:
-                        with base_url.lock:
-                            self.links.put(link)
-                else:
-                    with base_url.lock:
-                        self.links.put(link)
-            with base_url.lock:
-                historic_links += self.robot_txt.sitemap.links
+            logger.debug('SITEMAP FOUND WITH {} LINKS.'.format(
+                len(self.robot_txt.sitemap.links)))
+            self.base_url.add_links(
+                link_container=self.robot_txt.sitemap,
+                depth=self.depth,
+                base_url=self.base
+            )
+            logger.debug('SITEMAP FOUND FOR: ' + self.base)
         except AttributeError:
-            logger.debug('SITEMAP NOT FOUND FOR: ' + self.base)
+            logger.debug('SITEMAP _NOT_ FOUND FOR: ' + self.base)
         self.webpage = page
 
     def _can_fetch(self, url_):
@@ -397,7 +403,7 @@ class Crawler(object):
     def run(self):
         """Run crawler"""
         number_of_website_threads = 1
-        # Run while there is still active website-threads left.
+        # Run while there are still active website-threads left.
         while number_of_website_threads > 0:
             # Run as much threads as MAX_THREADS (from settings) sets.
             while 0 < number_of_website_threads <= MAX_THREADS:
@@ -410,7 +416,7 @@ class Crawler(object):
                     )
                     thread.start()
                 except queue.Empty:
-                    pass
+                    logger.debug("Queue of base urls is empty.")
                 number_of_website_threads = threading.activeCount() - 1
                 logger.debug(
                     "CRAWLER: Number of threads with websites running: {}"
@@ -437,3 +443,8 @@ class Crawler(object):
         )
         website.run()
         self.websites.append(website)
+
+
+if __name__ == "__main__":
+    dutch_news_crawler = Crawler(SITES)
+    dutch_news_crawler.run()

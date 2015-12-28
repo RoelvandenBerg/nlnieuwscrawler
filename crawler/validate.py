@@ -2,6 +2,7 @@
 __author__ = 'roelvdberg@gmail.com'
 
 import re
+import urllib.parse
 
 try:
     from settings import NOFOLLOW
@@ -55,3 +56,17 @@ def url_explicit(url_):
     """
     match = bool(url_regex.search(url_)) and url(url_)
     return match
+
+
+import urllib.parse
+
+def url_encode_non_ascii(b):
+    x = re.sub('[\x80-\xFF]', lambda c: '%%%02x' % ord(c.group(0)),
+                  b.decode('utf-8'))
+    return x
+
+def iri_to_uri(iri):
+    parts = urllib.parse.urlparse(iri)
+    return urllib.parse.urlunparse([
+        url_encode_non_ascii(part.encode('utf-8')) for part in parts
+    ])

@@ -86,13 +86,9 @@ class Txt(robotparser.RobotFileParser):
                                                                     True))
                         state = 2
                 elif line[0] == 'sitemap':
-                    print(line)
                     sitemap_url = line[1]
-                    print('hallo')
                     sitemap_ = sitemap.Sitemap(sitemap_url, self.url.strip('/robots.txt'))
-                    print('sitemap_')
                     self.sitemap = sitemap_.sitemap
-                    print(self.sitemap.links)
                 elif line[0].lower().startswith('crawl-delay'):
                     new_delay = float(line[1])
                     if self.crawl_delay < new_delay:
