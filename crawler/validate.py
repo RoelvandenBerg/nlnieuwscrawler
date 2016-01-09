@@ -60,13 +60,23 @@ def url_explicit(url_):
 
 import urllib.parse
 
+
 def url_encode_non_ascii(b):
     x = re.sub('[\x80-\xFF]', lambda c: '%%%02x' % ord(c.group(0)),
                   b.decode('utf-8'))
     return x
+
 
 def iri_to_uri(iri):
     parts = urllib.parse.urlparse(iri)
     return urllib.parse.urlunparse([
         url_encode_non_ascii(part.encode('utf-8')) for part in parts
     ])
+
+
+def get_base(url):
+    if "//" in url:
+        start, end = url.split('//')
+    else:
+        start, end = '', url
+    return start + end.split('/')[0]

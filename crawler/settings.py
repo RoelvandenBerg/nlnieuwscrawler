@@ -55,7 +55,7 @@ SITES = [
     ### sites below is a full list of sites:
     'http://112regiodrenthe.nl',
     'http://allesoverutrecht.nl',
-    'http://baarn.startpagina.nl',
+    # 'http://baarn.startpagina.nl',
     'http://biflatie.nl',
     'http://brekend.nl',
     'http://climategate.nl',
@@ -66,7 +66,7 @@ SITES = [
     'http://mwnw.nl',
     'http://nederlandsmedianieuws.nl',
     'http://nos.nl',
-    'http://nos.startpagina.nl',
+    # 'http://nos.startpagina.nl',
     'http://rtvzeewolde.nl',
     'http://sargasso.nl',
     'http://secureomg.nl',
@@ -195,16 +195,19 @@ SITES = [
     'http://www.waterkant.net',
     'http://www.wel.nl',
     'http://www.z24.nl',
-    'http://www.zuidoosthoeker.nl/',
+    'http://www.zuidoosthoeker.nl',
     'http://xandernieuws.punt.nl',
     'https://www.villamedia.nl',
 ]
+
+# SITES = ['http://baarn.startpagina.nl']
 
 ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE = False
 CRAWL_DEPTH = 0         # depth of links followed outside of base url
 CRAWL_DELAY = 5         # seconds of waiting time for each time crawled
 REVISIT_AFTER = 15      # revisit time in days
-MAX_THREADS = 50       # number of threads running at once
+MAX_THREADS = 50        # number of threads running at once
+MAX_CONCURRENT_SITEMAPS = 5  # number of sitemaps allowed to be fetched at once
 
 DATE_TIME_DISTANCE = 4  # allowed distance in characters between date and time
 

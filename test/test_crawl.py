@@ -175,7 +175,7 @@ sitemap.XmlSitemapIndex.fetch = fetch
 sitemap.XmlUrlset.fetch = fetch
 
 class TestSitemap(unittest.TestCase):
-    sitemap = sitemap.Sitemap(url=sitemapindexlocation, base_url='')
+    sitemap = sitemap.Sitemap(url=sitemapindexlocation, base='')
 
     def test_sitemap_load(self):
         print(self.sitemap.links)

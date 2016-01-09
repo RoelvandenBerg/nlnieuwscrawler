@@ -11,6 +11,7 @@ import urllib.error
 import urllib.parse
 
 import dateutil.parser
+import pybloof
 
 try:
     from settings import *
@@ -54,7 +55,9 @@ ENCODINGS = ['utf_8', 'latin_1', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32',
              'shift_jisx0213', 'tactis', 'tis_620', 'uu_codec', 'zlib_codec',
              'ascii']
 
+
 ENCODINGS = list(reversed(ENCODINGS))
+
 
 class BaseUrl(list):
     """
@@ -77,18 +80,24 @@ class BaseUrl(list):
 
     Within a BaseUrl Each base url is stored as a list of parameters:
     [0]: the base url string
-    [1]: historic_links: a list of all links that have been found (within each
-        thread that crawls for urls).
-    [2]: link_queue: a queue of all links that still need to be crawled.
+    [1]: link_queue: a queue of all links that still need to be crawled.
     """
     base_regex = re.compile(r"^(?:http)s?://[\w\-_\.]+", re.IGNORECASE)
 
-    def __init__(self, base, database_lock):
+    def __init__(self, base, database_lock, bloomfilter_size=33547705,
+                 bloomfilter_hashes=23, bloomfilter_max=1000000):
         """
         :param base: either a string with a base url or a list of strings with
             base urls.
         """
+        self.history = pybloof.StringBloomFilter(
+            size=bloomfilter_size,
+            hashes=bloomfilter_hashes
+        )
+        self.total_stored = 0
+        self.max = bloomfilter_max
         self.database_lock = database_lock
+        self.sitemap_semaphore = threading.Semaphore(MAX_CONCURRENT_SITEMAPS)
         super().__init__()
         self.session = model.Session()
         self += [[] for _ in range(CRAWL_DEPTH + 1)]
@@ -155,15 +164,16 @@ class BaseUrl(list):
         :param current_depth: depth at which the url has been harvested.
         """
         with self.lock:
+            url = url.strip('/')
             # iterate over base urls at each depth in self to check if url is
             # in one of the base urls
             for i, link_bundle in enumerate(self):
-                for base, link_history, link_queue in link_bundle:
+                for base, link_queue in link_bundle:
                     # test if url contains base and hasn't been added before
                     if self.url_belongs_to_base(url, base):
-                        if url not in link_history:
+                        if url not in self.history:
                             # link hasn't been added before, so store it
-                            link_history.append(url)
+                            self.add_to_history(url)
                             if crawl_url:
                                 link_queue.put(url)
                         return
@@ -171,6 +181,13 @@ class BaseUrl(list):
             # as a base url.
             current_depth += 1
             self.append(url, current_depth)
+
+    def add_to_history(self, url):
+        self.history.add(url)
+        self.total_stored += 1
+        if self.total_stored > self.max:
+            raise MemoryError('Too many urls stored in '
+                              'bloomfilter')
 
     def append(self, url, depth):
         """
@@ -182,20 +199,20 @@ class BaseUrl(list):
         if depth > CRAWL_DEPTH:
             return
         with self.lock:
-            base = self.base_regex.findall(url)[0] + "/"
+            base = self.base_regex.findall(url)[0]
             if base not in self[depth] or validate.url_explicit(url):
                 logger.debug('BASE_URL: adding new base @depth {} : {}'
                              .format(depth, base))
                 link_queue = queue.Queue()
                 link_queue.put(url)
-                historic_links = [url]
+                self.add_to_history(url)
                 # base urls are added to the crawl queue only if set in
                 # settings:
                 if ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE:
                     link_queue.put(base)
-                    historic_links.append(base)
-                self[depth].append((url, historic_links, link_queue))
-                self.base_queue.put((base, depth, historic_links, link_queue))
+                    self.add_to_history(base)
+                self[depth].append((url, link_queue))
+                self.base_queue.put((base, depth, link_queue))
                 if not self.load_from_db:
                     self.store(base, depth)
             else:
@@ -213,7 +230,7 @@ class BaseUrl(list):
         if not base_url:
             base_url = self.base[0]
         try:
-            for url_ in link_container.links:
+            for url_ in link_container:
                 if "#" in url_:
                     url_ = url_.split('#')[0]
                     if not len(url_):
@@ -241,10 +258,8 @@ class BaseUrl(list):
             [
                 "\nDEPTH {}:\n".format(str(i)) +
                 "\n".join(
-                    ["    - qsize: {} - {}\n".format(base[2].qsize(), base[0])
-                     + "\n".join(
-                        ["        o {} ".format(url) for url in base[1]]
-                    ) for base in layer]
+                    ["    - qsize: {} - {}\n".format(base[1].qsize(), base[0])
+                     for base in layer]
                 ) for i, layer in enumerate(self)
             ]
         )
@@ -273,12 +288,11 @@ class Website(object):
     Website crawler that crawls all pages in a website.
     """
 
-    def __init__(self, base, link_queue, historic_links, page=webpage.WebpageRaw,
+    def __init__(self, base, link_queue, page=webpage.WebpageRaw,
                  base_url=None, depth=0, database_lock=None):
         """
         :param base: base url string .
         :param link_queue: queue from base url.
-        :param historic_links: historic links from base url.
         :param page: WebPage class or one of its children.
         :param base_url: BaseUrl object that at least contains this website.
         :param depth: crawl depth of this website.
@@ -291,13 +305,16 @@ class Website(object):
         self.session = model.Session()
         self.base = base
         self.has_content = True
-        self.robot_txt = robot.Txt(urllib.parse.urljoin(base, 'robots.txt'))
-        self.robot_txt.read()
         if base_url:
             self.base_url = base_url
         else:
             self.base_url = BaseUrl(base, self.database_lock)
             _, _, links = self.base_url.base_queue.get()
+        self.robot_txt = robot.Txt(
+            url=urllib.parse.urljoin(base,'robots.txt'),
+            base_url=self.base_url
+        )
+        self.robot_txt.read()
         self.links = link_queue
         self.depth = depth
         try:
@@ -352,7 +369,7 @@ class Website(object):
             try:
                 page = self.webpage(
                     url=link,
-                    base_url=self.base,
+                    base=self.base,
                     database_lock=self.database_lock,
                     encoding=self.encoding[0]
                 )
@@ -367,8 +384,8 @@ class Website(object):
         if page.encoding != self.encoding[0]:
             self.encoding.append(page.encoding)
         if page.followable:
-            urlfetcher = webpage.Links(url=link, base_url=self.base,
-                                      html=page.html, download=False)
+            urlfetcher = webpage.Links(url=link, base=self.base,
+                                       html=page.html, download=False)
             self.base_url.add_links(urlfetcher, self.depth, self.base)
         else:
             logger.debug('WEBSITE: webpage not followable: {}'.format(link))
@@ -430,12 +447,11 @@ class Crawler(object):
         Worker that crawls one website.
         :param base: base instance from base_queue from a BaseUrl object.
         """
-        site, depth, historic_links, link_queue = base
+        site, depth, link_queue = base
         logger.debug("CRAWLER: run for {} depth: {}".format(site, depth))
         website = Website(
             base=site,
             link_queue=link_queue,
-            historic_links=historic_links,
             page=self.webpage,
             base_url=self.base_url,
             depth=depth,

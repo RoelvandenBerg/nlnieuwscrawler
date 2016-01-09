@@ -51,7 +51,7 @@ class Head(object):
     location = "/html/head"
     tags = {
         "title": "title",
-        "base": "base_url",
+        "base": "base",
         "meta": (
             ("name", {
                 "keywords": "keywords",
@@ -152,8 +152,8 @@ class WebpageRaw(object):
     head = True
     parser = etree.HTML
 
-    def __init__(self, url, html=None, base_url=None, database_lock=None,
-                 encoding='utf-8', *args, **kwargs):
+    def __init__(self, url, html=None, base=None, database_lock=None,
+                 encoding='utf-8', save_file=False, *args, **kwargs):
         """
         Fetch all content from a site and store it in text format.
 
@@ -163,20 +163,23 @@ class WebpageRaw(object):
         the extra possible parameters.
 
         :param url: the http-address of the website that is to be parsed.
-        :param base_url: (optional) the base url that belongs to this url.
+        :param base: (optional) the base url that belongs to this url.
         """
+        filename = "../data/thread_" + str(threading.get_ident()) + '.data'
+        self.filename = filename
         if not database_lock:
             self.database_lock = threading.RLock()
         else:
             self.database_lock = database_lock
-        if base_url:
-            self.base_url = base_url
+        if base:
+            self.base = base
         else:
-            self.base_url = url
+            self.base = validate.get_base(url)
         self.html = html
         self.url = url
         self.encoding = encoding
         self.session = model.Session()
+        self.save_to_disk = save_file
         self.fetch(*args, **kwargs)
         if self.head:
             self.head = Head(self.base_tree, self.html)
@@ -195,6 +198,9 @@ class WebpageRaw(object):
             not be downloaded. The parse method will look at the html content
             given on initialization.
         """
+        if self.save_to_disk:
+            urllib.request.urlretrieve(url, self.filename)
+            return
         if download and not self.html:
             if url is None:
                 url = self.url
@@ -207,11 +213,15 @@ class WebpageRaw(object):
                     self.encoding = encoding
                 content = response.read()
                 self.html = content.decode(self.encoding).encode(
-                    'utf-8')    
+                    'utf-8')
         self.parse(*args, **kwargs)
 
     def parse(self, *args, **kwargs):
-        self.base_tree = self.parser(self.html)
+        pass
+
+    @property
+    def base_tree(self):
+        return self.parser(self.html)
 
     def store(self):
         """
@@ -236,7 +246,7 @@ class WebpageRaw(object):
         """
         with self.database_lock:
             return self.session.query(model.Website).filter_by(
-                url=self.base_url).one()
+                url=self.base).one()
 
     @property
     def webpage_entry(self):
@@ -291,7 +301,6 @@ class WebpageRaw(object):
             website.webpages.append(head_item)
             self.store_model(item=website)
             logger.debug('Webpage entry added: {}'.format(self.url))
-
 
     def find_in_head(self, attr):
         """
@@ -374,7 +383,7 @@ class Webpage(WebpageRaw):
     selector_string = None
     selector_method_name = "xpath"
 
-    def __init__(self, url, html=None, base_url=None, database_lock=None,
+    def __init__(self, url, html=None, base=None, database_lock=None,
                  *args, **kwargs):
         """
         Fetch all content from a site and parse it.
@@ -387,7 +396,7 @@ class Webpage(WebpageRaw):
         :param url: the http-address of the website that is to be parsed.
         :param html: (optional) in case the content of a site is allready
             obtained, this can be given in html.
-        :param base_url: (optional) the base url that belongs to this url.
+        :param base: (optional) the base url that belongs to this url.
         """
         if not isinstance(self.tag, list):
             self.tag = [self.tag]
@@ -396,10 +405,10 @@ class Webpage(WebpageRaw):
         if not isinstance(self.attr, list):
             self.attr = [self.attr]
             self.one_tag = True
-        super().__init__(url, html, base_url, database_lock, *args,
+        super().__init__(url, html, base, database_lock, *args,
                          **kwargs)
 
-    def parse(self):
+    def parse(self, *args, **kwargs):
         """
         Parse html from self.html and store the retrieved content.
 
@@ -419,7 +428,7 @@ class Webpage(WebpageRaw):
         for i, t in enumerate(self.tag):
             content = [self._get_attr(y, i) for x in self.trees for y in
                        x.iter() if y.tag == t]
-            logger.debug(t + ' with name ' + self.name[i] + ' with number: ' +
+            logger.info(t + ' with name ' + self.name[i] + ' with number: ' +
                          str(i) + ' and lenght: ' + str(len(content)))
             self._set_content(i, t, content)
         self.parse_edit()
@@ -593,11 +602,61 @@ class Links(Webpage):
     tag = ["a", "a"]
     attr = ["href", "rel"]
     name = ["links", "robots"]
+    visited = []
+
+    def __init__(self, *args, **kwargs):
+        self._f_iter = iter(self.fast_iter())
+        self._l_iter = iter(self.link_iter())
+        super().__init__(*args, **kwargs)
 
     def parse_edit(self):
         """
         When parsing, validate url. And check links for nofollow.
         """
         robot_nofollow = self.robot_archive_options + ['nofollow']
-        self.links = [link for i, link in enumerate(self.links) if validate.url(
-            link) and not self.robots[i] in robot_nofollow]
+        self.links = (link for i, link in enumerate(self.links) if validate.url(
+            link) and not self.robots[i] in robot_nofollow)
+
+    def fast_iter(self):
+        """
+        fast_iter is useful if you need to free memory while iterating through a
+        very large XML file.
+
+        http://lxml.de/parsing.html#modifying-the-tree
+        Based on Liza Daly's fast_iter
+        http://www.ibm.com/developerworks/xml/library/x-hiperfparse/
+        See also http://effbot.org/zone/element-iterparse.htm
+        """
+        with open(self.filename, 'rb') as fileobj:
+            context = etree.iterparse(fileobj, events=('end',), tag='a')
+            for event, elem in context:
+                yield elem.attrib['href']
+                # It's safe to call clear() here because no descendants will be
+                # accessed
+                elem.clear()
+                # Also eliminate now-empty references from the root node to elem
+                for ancestor in elem.xpath('ancestor-or-self::*'):
+                    while ancestor.getprevious() is not None:
+                        del ancestor.getparent()[0]
+            del context
+
+    def link_iter(self):
+        for link in self.links:
+            if link not in self.visited:
+                yield link
+                self.visited.append(link)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        """
+        Iterate over self.links or a given saved html-file.
+
+        Only yield a sitemap url when it has not yet been visited. Only add
+        sitemaps when full sitemaps are encountered.
+        """
+        if self.save_to_disk:
+            return next(self._f_iter)
+        else:
+            return next(self._l_iter)
