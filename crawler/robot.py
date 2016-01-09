@@ -7,18 +7,16 @@ import urllib.robotparser as robotparser
 
 
 try:
+    from base import logger_setup
     from settings import CRAWL_DELAY
     import sitemap
 except ImportError:
+    from crawler.base import logger_setup
     from crawler.settings import CRAWL_DELAY
     import crawler.sitemap as sitemap
 
 
-# setup logger
-logger = logging.getLogger(__name__)
-printlogger = logging.StreamHandler()
-printlogger.setLevel(logging.DEBUG)
-logger.addHandler(printlogger)
+logger = logger_setup(__name__)
 
 
 class Txt(robotparser.RobotFileParser):

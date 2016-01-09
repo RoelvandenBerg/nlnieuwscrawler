@@ -11,18 +11,16 @@ import urllib.error
 import lxml.etree as etree
 
 try:
+    from base import logger_setup
     import webpage
     import validate
 except ImportError:
+    from crawler.base import logger_setup
     import crawler.webpage as webpage
     import crawler.validate as validate
 
 
-# setup logger
-logger = logging.getLogger(__name__)
-printlogger = logging.StreamHandler()
-printlogger.setLevel(logging.DEBUG)
-logger.addHandler(printlogger)
+logger = logger_setup(__name__)
 
 
 class Sitemap(object):

@@ -12,20 +12,18 @@ from lxml import etree
 from sqlalchemy.orm.exc import NoResultFound
 
 try:
+    from base import logger_setup
     import model
     from settings import USER_AGENT_INFO, USER_AGENT
     import validate
 except ImportError:
+    from crawler.base import logger_setup
     import crawler.model as model
     from crawler.settings import USER_AGENT_INFO, USER_AGENT
     import crawler.validate as validate
 
 
-# setup logger
-logger = logging.getLogger(__name__)
-printlogger = logging.StreamHandler()
-printlogger.setLevel(logging.DEBUG)
-logger.addHandler(printlogger)
+logger = logger_setup(__name__)
 
 
 def stringify(string):
