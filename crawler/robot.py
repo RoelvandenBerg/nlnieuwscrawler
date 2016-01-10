@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 __author__ = 'roelvdberg@gmail.com'
 
-import logging
 import urllib.parse
 import urllib.robotparser as robotparser
 

@@ -3,26 +3,27 @@ __author__ = 'roelvdberg@gmail.com'
 
 from datetime import datetime as dt
 import logging
-import queue
 import threading
 import time
 import urllib.error
 import urllib.parse
 
 try:
-    from settings import *
-    import validate
+    import base
+    from filequeue import Empty
     import model
     import robot
+    from settings import *
+    import validate
     import webpage
-    import base
 except ImportError:
-    from crawler.settings import *
-    import crawler.validate as validate
+    import crawler.base as base
+    from crawler.filequeue import Empty
     import crawler.model as model
     import crawler.robot as robot
+    from crawler.settings import *
+    import crawler.validate as validate
     import crawler.webpage as webpage
-    import crawler.base as base
 
 
 logging.basicConfig(filename=LOG_FILENAME, level=logging.DEBUG)
@@ -79,8 +80,8 @@ class Website(object):
         if base_url:
             self.base_url = base_url
         else:
-            self.base_url = base.BaseUrl(base, self.database_lock)
-            _, _, links = self.base_url.base_queue.get()
+            self.base_url = base.BaseUrl(base=base,
+                                         database_lock=self.database_lock)
         self.robot_txt = robot.Txt(
             url=urllib.parse.urljoin(base, 'robots.txt'),
             base_url=self.base_url
@@ -94,7 +95,7 @@ class Website(object):
             self.base_url.add_links(
                 link_container=self.robot_txt.sitemap,
                 depth=self.depth,
-                base_url=self.base
+                base=self.base
             )
             logger.debug('SITEMAP FOUND FOR: ' + self.base)
         except AttributeError:
@@ -115,7 +116,7 @@ class Website(object):
             start_time = time.time()
             try:
                 self._run_once()
-            except queue.Empty:
+            except Empty:
                 self.has_content = False
             try:
                 wait_time_left = self.robot_txt.crawl_delay + start_time - \
@@ -131,7 +132,7 @@ class Website(object):
         """Runs one webpage of a website crawler."""
         logger.debug('WEBSITE: Running webpage: {url}'
                      .format(url=str(self.base)))
-        link = self.links.get(timeout=1)
+        link = self.links.get()
         if not self._can_fetch(link):
             logger.debug('WEBSITE: webpage {} cannot be fetched.'
                          .format(link))
@@ -157,7 +158,11 @@ class Website(object):
         if page.followable:
             urlfetcher = webpage.Links(url=link, base=self.base,
                                        html=page.html, download=False)
-            self.base_url.add_links(urlfetcher, self.depth, self.base)
+            self.base_url.add_links(
+                link_container=urlfetcher,
+                depth=self.depth,
+                base=self.base
+            )
         else:
             logger.debug('WEBSITE: webpage not followable: {}'.format(link))
         if page.archivable:
@@ -197,13 +202,13 @@ class Crawler(object):
             while 0 < number_of_website_threads <= MAX_THREADS:
                 # start a new website thread:
                 try:
-                    base = self.base_url.base_queue.get(timeout=5)
+                    base_url_queue_item = self.base_url.base_queue.get()
                     thread = threading.Thread(
                         target=self._website_worker,
-                        args=(base,)
+                        args=(base_url_queue_item,)
                     )
                     thread.start()
-                except queue.Empty:
+                except Empty:
                     logger.debug("Queue of base urls is empty.")
                 number_of_website_threads = threading.activeCount() - 1
                 logger.debug(
@@ -213,15 +218,16 @@ class Crawler(object):
         logger.debug("CRAWLER: Finished")
         logger.debug("CRAWLER:\n" + repr(self.base_url))
 
-    def _website_worker(self, base):
+    def _website_worker(self, base_url_queue_item):
         """
         Worker that crawls one website.
         :param base: base instance from base_queue from a BaseUrl object.
         """
-        site, depth, link_queue = base
-        logger.debug("CRAWLER: run for {} depth: {}".format(site, depth))
+        base, depth = base_url_queue_item
+        link_queue = self.base_url[depth][base]
+        logger.debug("CRAWLER: run for {} depth: {}".format(base, depth))
         website = Website(
-            base=site,
+            base=base,
             link_queue=link_queue,
             page=self.webpage,
             base_url=self.base_url,

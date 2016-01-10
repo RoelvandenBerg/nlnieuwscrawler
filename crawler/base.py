@@ -1,8 +1,5 @@
-__author__ = 'roelvdberg@gmail.com'
-
 from datetime import datetime as dt
 import logging
-import queue
 import re
 import threading
 import urllib.error
@@ -10,11 +7,15 @@ import urllib.parse
 
 import pybloof
 
+__author__ = 'roelvdberg@gmail.com'
+
 try:
+    from filequeue import FileQueue
     import model
     from settings import *
     import validate
 except ImportError:
+    from crawler.filequeue import FileQueue
     import crawler.model as model
     from crawler.settings import *
     import crawler.validate as validate
@@ -32,6 +33,12 @@ def logger_setup(name):
 logger = logger_setup(__name__)
 
 
+base_regex = re.compile(r"^(?:http)s?://[\w\-_\.]+", re.IGNORECASE)
+
+def parse_base(url):
+    return base_regex.findall(url)[0]
+
+
 class BaseUrl(list):
     """
     A list of baseurls that can be crawled.
@@ -43,7 +50,7 @@ class BaseUrl(list):
     and urls found within a webpage that do not match that webpages' base url
     have an increased depth (by 1). Thus a BaseUrl has the following form:
 
-    [[BASE_URL, ...]n=0, [..., ...]n=1, [..., ...]n=2, ..., []n=CRAWL_DEPTH]
+    [{BASE_URL: , ...}n=0, {..., ...}n=1, {..., ...}n=2, ..., {}n=CRAWL_DEPTH]
 
     The CRAWL_DEPTH can be set in the settings file.
 
@@ -55,7 +62,6 @@ class BaseUrl(list):
     [0]: the base url string
     [1]: link_queue: a queue of all links that still need to be crawled.
     """
-    base_regex = re.compile(r"^(?:http)s?://[\w\-_\.]+", re.IGNORECASE)
 
     def __init__(self, base, database_lock, bloomfilter_size=33547705,
                  bloomfilter_hashes=23, bloomfilter_max=1000000):
@@ -73,9 +79,14 @@ class BaseUrl(list):
         self.sitemap_semaphore = threading.Semaphore(MAX_CONCURRENT_SITEMAPS)
         super().__init__()
         self.session = model.Session()
-        self += [[] for _ in range(CRAWL_DEPTH + 1)]
+        self += [{} for _ in range(CRAWL_DEPTH + 1)]
         self.lock = threading.RLock()
-        self.base_queue = queue.Queue()
+        self.base_queue = FileQueue(
+            directory="../data",
+            name='base_url',
+            persistent=True,
+            overwrite=True
+        )
         if isinstance(base, str):
             base = [base]
         self.load_from_db = True
@@ -140,8 +151,8 @@ class BaseUrl(list):
             url = url.strip('/')
             # iterate over base urls at each depth in self to check if url is
             # in one of the base urls
-            for i, link_bundle in enumerate(self):
-                for base, link_queue in link_bundle:
+            for i, base_bundle in enumerate(self):
+                for base, link_queue in base_bundle.items():
                     # test if url contains base and hasn't been added before
                     if self.url_belongs_to_base(url, base):
                         if url not in self.history:
@@ -172,11 +183,21 @@ class BaseUrl(list):
         if depth > CRAWL_DEPTH:
             return
         with self.lock:
-            base = self.base_regex.findall(url)[0]
+            base = parse_base(url)
             if base not in self[depth] or validate.url_explicit(url):
                 logger.debug('BASE_URL: adding new base @depth {} : {}'
                              .format(depth, base))
-                link_queue = queue.Queue()
+                if '//' in base:
+                    queue_name = base.split('//')[1]
+                else:
+                    queue_name = base
+                link_queue = FileQueue(
+                    directory="../data",
+                    name=queue_name,
+                    persistent=True,
+                    overwrite=True,
+                    pickled=False
+                )
                 link_queue.put(url)
                 self.add_to_history(url)
                 # base urls are added to the crawl queue only if set in
@@ -184,43 +205,43 @@ class BaseUrl(list):
                 if ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE:
                     link_queue.put(base)
                     self.add_to_history(base)
-                self[depth].append((url, link_queue))
-                self.base_queue.put((base, depth, link_queue))
+                self[depth][base] = link_queue
+                self.base_queue.put((base, depth))
                 if not self.load_from_db:
                     self.store(base, depth)
             else:
                 logger.debug("BASE_URL: cannot add {}".format(base))
 
-    def add_links(self, link_container, depth=0, base_url=None):
+    def add_links(self, link_container, depth=0, base=None):
         """
         Add a list of urls to self at a certain depth.
 
         :param link_container: list of urls
         :param depth: depth at which the urls have been harvested
-        :param base_url: base at which the urls have been harvested
+        :param base: base at which the urls have been harvested
         """
-        number_o_links = 0
-        if not base_url:
-            base_url = self.base[0]
+        number_of_links = 0
+        if not base:
+            base = self.base[0]
         try:
-            for url_ in link_container:
-                if "#" in url_:
-                    url_ = url_.split('#')[0]
-                    if not len(url_):
+            for url in link_container:
+                if "#" in url:
+                    url = url.split('#')[0]
+                    if not len(url):
                         continue
-                if not url_.startswith("http"):
-                    url_ = urllib.parse.urljoin(base_url, url_)
-                if not validate.url_explicit(url_):
+                if not url.startswith("http"):
+                    url = urllib.parse.urljoin(base, url)
+                if not validate.url_explicit(url):
                     continue
-                self.add(url_, depth)
-                number_o_links += 1
+                self.add(url, depth)
+                number_of_links += 1
         except AttributeError:
             logger.debug(
                 'AttributeError while iterating over links @base {}'.format(
-                    number_o_links, base_url)
+                    number_of_links, base)
             )
         logger.debug('{} links added @base {} .'.format(
-            number_o_links, base_url))
+            number_of_links, base))
 
     def __str__(self):
         return "BaseUrl with at depth 0: " + \
@@ -231,8 +252,8 @@ class BaseUrl(list):
             [
                 "\nDEPTH {}:\n".format(str(i)) +
                 "\n".join(
-                    ["    - qsize: {} - {}\n".format(base[1].qsize(), base[0])
-                     for base in layer]
+                    ["    - qsize: {} for {}\n".format(link_queue.qsize(), base)
+                     for base, link_queue in layer.items()]
                 ) for i, layer in enumerate(self)
             ]
         )
@@ -242,7 +263,7 @@ class BaseUrl(list):
         """
         List of base urls at lowest depth.
         """
-        return [x[0] for x in self[0]]
+        return [x for x, _ in self[0].items()]
 
     @property
     def has_content(self):
@@ -250,7 +271,7 @@ class BaseUrl(list):
         Indicates whether any of the base urls still has links in their queue.
         """
         try:
-            return any(any(url[2].qsize() > 0 for url in urls_at_one_depth)
-                       for urls_at_one_depth in self)
+            return any(any(q.qsize() > 0 for q in l.values()) for l in self)
         except IndexError:
             return False
+

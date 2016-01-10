@@ -3,7 +3,6 @@ __author__ = 'roelvdberg@gmail.com'
 
 from gzip import GzipFile
 import urllib.request as request
-import logging
 from io import BytesIO
 import urllib.error
 # from zipfile import ZipFile

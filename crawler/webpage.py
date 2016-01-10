@@ -3,7 +3,6 @@ __author__ = 'roelvdberg@gmail.com'
 
 from datetime import datetime as dt
 import dateutil.parser as dtparser
-import logging
 import threading
 import urllib.parse
 import urllib.request as request
@@ -12,18 +11,18 @@ from lxml import etree
 from sqlalchemy.orm.exc import NoResultFound
 
 try:
-    from base import logger_setup
+    import base
     import model
     from settings import USER_AGENT_INFO, USER_AGENT
     import validate
 except ImportError:
-    from crawler.base import logger_setup
+    import crawler.base as base
     import crawler.model as model
     from crawler.settings import USER_AGENT_INFO, USER_AGENT
     import crawler.validate as validate
 
 
-logger = logger_setup(__name__)
+logger = base.logger_setup(__name__)
 
 
 def stringify(string):
@@ -37,6 +36,7 @@ def stringify(string):
         return str(string)
     else:
         return ""
+
 
 class Head(object):
     """
@@ -172,7 +172,7 @@ class WebpageRaw(object):
         if base:
             self.base = base
         else:
-            self.base = validate.get_base(url)
+            self.base = base.parse_base(url)
         self.html = html
         self.url = url
         self.encoding = encoding
