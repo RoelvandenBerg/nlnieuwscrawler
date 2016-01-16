@@ -20,8 +20,8 @@ class FileQueue(object):
 
     * FIFO: First In First Out. When a queue is made persistent and reused,
     this FIFO is broken in a sense that when a queue is deleted (but the
-    files still persist) the items still in read are put into add and thus
-    these items in front of the queue are put in the back.
+    files still persist) the items still in the get file are put into the put
+    file and thus these items in front of the queue are put in the back.
     """
 
     def __init__(self, directory="", name=None, persistent=False,
@@ -30,11 +30,11 @@ class FileQueue(object):
         Low memory FIFO queue that keeps queue on disk.
 
         Queue is stored in two files:
-        'read_thread_[thread-id or given name]_[id].queue'
-        'add_thread_[thread-id or given name]_[id].queue'
+        'get_thread_[thread-id or given name]_[id].queue'
+        'put_thread_[thread-id or given name]_[id].queue'
 
         The former (read) is used for reading the queue and gets filled with the
-        latter (add) when empty. The latter (add) is used to put new items into
+        latter (put) when empty. The latter (put) is used to put new items into
         the queue.
 
         :param directory: Directory where the queue files are stored.
@@ -61,31 +61,31 @@ class FileQueue(object):
         self.directory = directory.rstrip('/') + '/' if len(directory) else ""
         if not os.path.exists(self.directory) and self.directory:
             os.makedirs(self.directory)
-        self.add_queue_name = self._filename('add')
-        self.read_queue_name = self._filename('read')
-        self.add_lock = threading.Lock()
-        self.read_lock = threading.Lock()
+        self.put_queue_name = self._filename('put')
+        self.get_queue_name = self._filename('get')
+        self.put_lock = threading.Lock()
+        self.get_lock = threading.Lock()
         self.iterator = iter(self._iterator())
         self._finalizer = weakref.finalize(self, self._remove)
-        self.read_queue_length = 0
-        self.add_queue_length = 0
+        self.get_queue_length = 0
+        self.put_queue_length = 0
         self._puttable = True
 
     def put(self, item):
         """
-        Put item into the queue. Only eats strings.
+        Put item into the queue.
 
-        :param item: string to put in queue.
+        :param item: string or other Python object to put in queue.
         """
         if not self._puttable:
             raise Empty('Putting to emptied queue is not allowed.')
-        with self.add_lock:
-            with open(self.add_queue_name, self._method('a')) as f:
+        with self.put_lock:
+            with open(self.put_queue_name, self._filehandler_method('a')) as f:
                 if self.pickled:
                     pickle.dump(item, f)
                 else:
                     f.write(item + '\n')
-            self.add_queue_length += 1
+            self.put_queue_length += 1
 
     def get(self):
         """
@@ -93,8 +93,8 @@ class FileQueue(object):
 
         Raises Empty when empty.
 
-        :return: item (string) if one is immediately available, else raise the
-            Empty exception
+        :return: item (string or other python object) if one is immediately
+            available, else raise the Empty exception
         """
         try:
             return next(self)
@@ -128,7 +128,7 @@ class FileQueue(object):
         """
         Removes queue files when persistent or puts them in a reusable state.
 
-        Files are made reusable by moving all items from read-file to add-file.
+        Files are made reusable by moving all items from get-file to put-file.
         """
         self._finalizer()
 
@@ -145,14 +145,14 @@ class FileQueue(object):
         return name
 
     def _touch(self, file_name, keep=False):
-        with open(file_name, self._method('a') if keep else self._method('w')):
+        with open(file_name, self._filehandler_method('a') if keep else self._filehandler_method('w')):
             os.utime(file_name)
 
     def _iterator(self):
         try_again = True
         while try_again:
-            with self.read_lock, \
-                    open(self.read_queue_name, self._method('r')) as f:
+            with self.get_lock, \
+                    open(self.get_queue_name, self._filehandler_method('r')) as f:
                 if self.pickled:
                     while True:
                         try:
@@ -161,36 +161,36 @@ class FileQueue(object):
                             break
                 else:
                     for line in f:
-                        self.read_queue_length -= 1
+                        self.get_queue_length -= 1
                         yield line.strip('\n')
-            try_again = self._move_strings_to_read()
-        os.remove(self.add_queue_name)
-        os.remove(self.read_queue_name)
+            try_again = self._move_strings_to_get_file()
+        os.remove(self.put_queue_name)
+        os.remove(self.get_queue_name)
         self._puttable = False
         yield None
 
-    def _move_strings_to_read(self):
+    def _move_strings_to_get_file(self):
         try_again = False
-        with self.add_lock, self.read_lock:
-            if self.read_queue_length != 0:
+        with self.put_lock, self.get_lock:
+            if self.get_queue_length != 0:
                 if self.persistent:
-                    self.read_queue_length = 0
+                    self.get_queue_length = 0
                 else:
-                    raise FileQueueError('Moving strings to "read" while it is '
+                    raise FileQueueError('Moving strings to "get" while it is '
                                          'not completely read.')
-            self._touch(self.read_queue_name)
-            added_length = self._move(from_=self.add_queue_name,
-                                                 to=self.read_queue_name)
-            self.read_queue_length += added_length
+            self._touch(self.get_queue_name)
+            added_length = self._move(from_=self.put_queue_name,
+                                                 to=self.get_queue_name)
+            self.get_queue_length += added_length
             try_again = bool(added_length)
-            self._touch(self.add_queue_name)
-            self.add_queue_length = 0
+            self._touch(self.put_queue_name)
+            self.put_queue_length = 0
         return try_again
 
     def _move(self, from_, to):
         i = 0
-        with open(from_, self._method('r')) as from_file, \
-                open(to, self._method('a')) as to_file:
+        with open(from_, self._filehandler_method('r')) as from_file, \
+                open(to, self._filehandler_method('a')) as to_file:
             if self.pickled:
                 while True:
                     try:
@@ -207,18 +207,18 @@ class FileQueue(object):
     def _remove(self):
         if self._puttable:
             if not self.persistent:
-                os.remove(self.add_queue_name)
-                os.remove(self.read_queue_name)
+                os.remove(self.put_queue_name)
+                os.remove(self.get_queue_name)
             else:
-                with open(self.add_queue_name, self._method('a')) as add_queue:
-                    for _ in range(self.read_queue_length):
+                with open(self.put_queue_name, self._filehandler_method('a')) as put_queue:
+                    for _ in range(self.get_queue_length):
                         if self.pickled:
-                            pickle.dump(self.get(), add_queue)
+                            pickle.dump(self.get(), put_queue)
                         else:
-                            add_queue.write(self.get() + '\n')
-                self._touch(self.read_queue_name)
+                            put_queue.write(self.get() + '\n')
+                self._touch(self.get_queue_name)
 
-    def _method(self, method):
+    def _filehandler_method(self, method):
         return method + 'b' if self.pickled else method
 
     def __next__(self):
@@ -229,7 +229,7 @@ class FileQueue(object):
             raise StopIteration
 
     def __add__(self, other):
-        length = other.read_queue_length
+        length = other.get_queue_length
         temp = FileQueue()
         for _ in range(length):
             other.put(other.get())
@@ -244,17 +244,15 @@ class FileQueue(object):
         return self
 
     def __len__(self):
-        return self.read_queue_length + self.add_queue_length
+        return self.get_queue_length + self.put_queue_length
 
     def __str__(self):
         return 'FileQueue for thread {} with length {}.'.format(
             threading.get_ident(), len(self))
 
     def __repr__(self):
+        get_queue_name = os.path.join(os.getcwd(), self.get_queue_name)
+        put_queue_name = os.path.join(os.getcwd(), self.put_queue_name)
         return str(self) + 'Files: Read: {} [len {}]; Add: {} [len {}]' \
-                           ''.format(os.path.join(os.getcwd(),
-                                                  self.read_queue_name),
-                                     self.read_queue_length,
-                                     os.path.join(os.getcwd(),
-                                                  self.add_queue_name),
-                                     self.add_queue_length)
+            ''.format(get_queue_name, self.get_queue_length,
+                      put_queue_name, self.put_queue_length)
