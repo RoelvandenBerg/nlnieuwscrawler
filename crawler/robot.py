@@ -1,19 +1,21 @@
 # -*- coding: utf-8 -*-
 __author__ = 'roelvdberg@gmail.com'
 
-import logging
 import urllib.parse
 import urllib.robotparser as robotparser
 
-from crawler.settings import CRAWL_DELAY
-import crawler.sitemap as sitemap
+
+try:
+    from base import logger_setup
+    from settings import CRAWL_DELAY
+    import sitemap
+except ImportError:
+    from crawler.base import logger_setup
+    from crawler.settings import CRAWL_DELAY
+    import crawler.sitemap as sitemap
 
 
-# setup logger
-logger = logging.getLogger(__name__)
-printlogger = logging.StreamHandler()
-printlogger.setLevel(logging.DEBUG)
-logger.addHandler(printlogger)
+logger = logger_setup(__name__)
 
 
 class Txt(robotparser.RobotFileParser):
@@ -25,8 +27,9 @@ class Txt(robotparser.RobotFileParser):
     - logging
     """
 
-    def __init__(self, url):
-        self.sitemap = None
+    def __init__(self, url, base_url):
+        self.base_url = base_url
+        self.sitemap = False
         self.crawl_delay = CRAWL_DELAY
         super().__init__(url)
 
@@ -82,8 +85,12 @@ class Txt(robotparser.RobotFileParser):
                         state = 2
                 elif line[0] == 'sitemap':
                     sitemap_url = line[1]
-                    sitemap_ = sitemap.Sitemap(sitemap_url, self.url.strip('/robots.txt'))
-                    self.sitemap = sitemap_.sitemap
+                    with self.base_url.sitemap_semaphore:
+                        sitemap_ = sitemap.Sitemap(
+                            url=sitemap_url,
+                            base=self.url.strip('/robots.txt'),
+                        )
+                        self.sitemap = sitemap_.sitemap
                 elif line[0].lower().startswith('crawl-delay'):
                     new_delay = float(line[1])
                     if self.crawl_delay < new_delay:
