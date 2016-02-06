@@ -4,7 +4,6 @@ __author__ = 'roelvdberg@gmail.com'
 from gzip import GzipFile
 import os
 import urllib.error
-# from zipfile import ZipFile
 
 import lxml.etree as etree
 
@@ -23,68 +22,77 @@ logger = logger_setup(__name__)
 
 class Sitemap(object):
 
-    def __init__(self, url, base, html=None, first=True):
-        if not url.startswith('http'):
-            if not url.startswith('www'):
-                new_url = base + '/' + url.strip('/')
-                self.url = new_url
+    def __init__(self, urls, base, html=None, first=True):
+        self.urls = []
+        if isinstance(urls, str):
+            urls = [urls]
+        for url in urls:
+            if not url.startswith('http'):
+                if not url.startswith('www'):
+                    new_url = base + '/' + url.strip('/')
+                    self.urls.append(new_url)
+                else:
+                    self.urls.append('http://' + url.strip('/'))
             else:
-                self.url = 'http://' + url.strip('/')
-        else:
-            self.url = url
-
+                self.urls.append(url)
         self.base = base
         self.first = first
         self.html = html
-        self.sitemap = False
-        logger.debug('SITEMAP INITIALIZED: ' + self.url)
-        self.choose()
+        self.iterator = iter(self._iterator())
+        self.iterable = True
+        logger.debug('SITEMAP INITIALIZED: ' + self.base)
 
-    def choose(self):
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self.iterator)
+
+    def _iterator(self):
+        while len(self.urls):
+            url = self.urls.pop()
+            print(url)
+            sitemap = self.choose(url)
+            print(sitemap)
+            for content in sitemap:
+                yield content
+        self.iterable = False
+        raise StopIteration
+        yield
+
+    def append(self, url):
+        self.urls.append(url)
+        if not self.iterable:
+            self.iterator = iter(self._iterator())
+            self.iterable = True
+
+    def choose(self, url):
         # determine what type of sitemap it entails.
-        if self.url.endswith('.gz'):
-            logger.debug('GunZip sitemap chosen: ' + self.url)
-            self.klass = GunZip
-        elif self.url.endswith('.xml') or (self.url.startswith(
-                'google') and self.url.endswith('map')):
-            logger.debug('XML sitemap chosen: ' + self.url)
-            self.klass = XmlSitemapIndex
-        elif self.url.endswith('.txt'):
-            logger.debug('TXT sitemap chosen: ' + self.url)
-            self.klass = Txt
-        # elif self.url.endswith('.zip'):  # TODO: Zip and Gzip libraries do
-                                           # TODO: not act the same way.
-                                           # TODO: Since Sitemaps (mostly)
-                                           # TODO: aren't zipped implementation
-                                           # TODO: is left for later time.
-        #     logger.debug('Zip sitemap chosen: ' + self.url)
-        #     self.klass = Zip
-        elif self.url == '/sitemapindex/':
-            logger.debug('XML sitemap chosen: ' + self.url)
-            self.url = self.base[:-10] + "sitemapindex"
-            self.klass = XmlSitemapIndex
+        if url.endswith('.gz'):
+            logger.debug('GunZip sitemap chosen: ' + url)
+            klass = GunZip
+        elif url.endswith('.xml') or (url.startswith('google') and
+                                          url.endswith('map')):
+            logger.debug('XML sitemap chosen: ' + url)
+            klass = XmlSitemapIndex
+        elif url.endswith('.txt'):
+            logger.debug('TXT sitemap chosen: ' + url)
+            klass = Txt
+        elif url == '/sitemapindex/':
+            logger.debug('XML sitemap chosen: ' + url)
+            url = self.base[:-10] + "sitemapindex"
+            klass = XmlSitemapIndex
         else:
             logger.debug('unknown sitemaptype, switching to XML sitemap Index: '
-                         + self.url)
-            self.klass = XmlSitemapIndex
-
+                         + url)
+            klass = XmlSitemapIndex
         try:
-            if self.sitemap:
-                logger.debug(
-                    "SITEMAP: added {}".format(self.url))
-                self.sitemap += self.klass(self.url, html=self.html)
-            else:
-                logger.debug(
-                    "SITEMAP: loading {}".format(self.url))
-                self.sitemap = self.klass(self.url, html=self.html,
-                                          base=self.base)
-                logger.debug('Sitemap loaded: {}'.format(self.url))
+            logger.debug("SITEMAP: loading {}".format(url))
+            return klass(url=url, html=self.html, base=self.base)
         except (AttributeError, TypeError, ValueError, urllib.error.URLError,
                 urllib.error.HTTPError):
-            logger.debug(
-                "SITEMAP: LOADING FAILED {}".format(self.url))
-            self.sitemap = ()
-            # raise Exception('sitemap_url ' + self.url)
+            logger.debug("SITEMAP: LOADING FAILED {}".format(url))
+            return ()
 
 
 class SitemapMixin(object):
@@ -196,7 +204,6 @@ class XmlSitemap(SitemapMixin, webpage.Webpage):
         return x
 
     def _next_sitemap_iterator(self, download):
-        raise TypeError
         return self.next(
                 url=self.url,
                 base=self.base,
