@@ -29,7 +29,7 @@ class Txt(robotparser.RobotFileParser):
 
     def __init__(self, url, base_url):
         self.base_url = base_url
-        self.sitemap = False
+        self.sitemap = ()
         self.crawl_delay = CRAWL_DELAY
         super().__init__(url)
 
@@ -86,11 +86,13 @@ class Txt(robotparser.RobotFileParser):
                 elif line[0] == 'sitemap':
                     sitemap_url = line[1]
                     with self.base_url.sitemap_semaphore:
-                        sitemap_ = sitemap.Sitemap(
-                            url=sitemap_url,
-                            base=self.url.strip('/robots.txt'),
-                        )
-                        self.sitemap = sitemap_.sitemap
+                        if self.sitemap:
+                            self.sitemap.append(sitemap_url)
+                        else:
+                            self.sitemap = sitemap.Sitemap(
+                                urls=sitemap_url,
+                                base=self.url.strip('/robots.txt'),
+                            )
                 elif line[0].lower().startswith('crawl-delay'):
                     new_delay = float(line[1])
                     if self.crawl_delay < new_delay:

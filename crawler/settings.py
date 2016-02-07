@@ -200,7 +200,7 @@ SITES = [
     'https://www.villamedia.nl',
 ]
 
-# SITES = ['http://baarn.startpagina.nl']
+# SITES = ['http://www.dvhn.nl/']
 
 ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE = False
 CRAWL_DEPTH = 0         # depth of links followed outside of base url
