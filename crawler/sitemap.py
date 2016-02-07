@@ -51,9 +51,7 @@ class Sitemap(object):
     def _iterator(self):
         while len(self.urls):
             url = self.urls.pop()
-            print(url)
             sitemap = self.choose(url)
-            print(sitemap)
             for content in sitemap:
                 yield content
         self.iterable = False
@@ -105,20 +103,23 @@ class SitemapMixin(object):
     unique_tag = ""
 
     def __init__(self, url, html=None, base=None, filename=None, download=True):
-        logger.debug('INIT SITEMAPMIXIN ' + url)
+        logger.debug('INIT SITEMAPMIXIN {} as {}.'.format(
+            url, self.__class__.__name__))
         self.links = []
         self.base = base
         self.modified_time = False
         self.publication_date = False
         self.revisit = False
         self.description = False
-        try:
-            super().__init__(url, html=html, base=base, save_file=True,
-                             filename=None, download=download)
-            self.unique_tag = self.namespace + self.unique_tag
-        except urllib.error.HTTPError:
-            logger.debug("SITEMAP @ {} DOESN'T EXIST; SKIPPED.".format(
-                url))
+        super().__init__(
+            url=url,
+            html=html,
+            base=base,
+            save_file=True,
+            filename=filename,
+            download=download
+        )
+        self.unique_tag = self.namespace + self.unique_tag
 
 
     def _attr_len(self, sitemap):
@@ -191,51 +192,65 @@ class XmlSitemap(SitemapMixin, webpage.Webpage):
 
     def __init__(self, url, html=None, base=None, filename=None, download=True):
         logger.debug('SITEMAP: loading XML ' + base)
-        super().__init__(url, html=html, base=base, filename=filename,
-                         download=download)
+        super().__init__(
+            url=url,
+            html=html,
+            base=base,
+            filename=filename,
+            download=download
+        )
+        self.filenameindex = 0
         if self.fits_xml:
             self._iterate_sitemaps = iter(self._fitting_sitemap_iterator())
         else:
             self._iterate_sitemaps = iter(self._next_sitemap_iterator(
-                download=True))
+                download=False, filename=self.filename))
 
     def __next__(self):
         x = next(self._iterate_sitemaps)
         return x
 
-    def _next_sitemap_iterator(self, download):
+    def _next_sitemap_iterator(self, download, filename=None):
+        fn = filename if filename else self.update_filename()
         return self.next(
-                url=self.url,
-                base=self.base,
-                download=download,
-                filename=self.filename
-            )
-
+                    url=self.url,
+                    base=self.base,
+                    download=download,
+                    filename=fn
+                )
 
     def _fitting_sitemap_iterator(self):
         sitemap_dict = {}
-        fi = 0
         while True:
             try:
                 tag, d = next(self._iterator)
             except StopIteration:
-                iterator = iter(self._sitemap(sitemap_dict, fi))
-                for link in iterator:
-                    yield link
+                iterator = iter(self._sitemap(sitemap_dict))
+                try:
+                    for link in iterator:
+                        yield link
+                except urllib.error.HTTPError:
+                    logger.debug("SITEMAP @ {} DOESN'T EXIST; SKIPPED.".format(
+                        self.url))
                 break
             name, value = list(d.items())[0]
             if name in sitemap_dict.keys():
-                iterator = iter(self._sitemap(sitemap_dict, fi))
-                for link in iterator:
-                    yield link
-                fi += 1
+                iterator = iter(self._sitemap(sitemap_dict))
+                try:
+                    for link in iterator:
+                        yield link
+                except urllib.error.HTTPError:
+                    logger.debug("SITEMAP @ {} DOESN'T EXIST; SKIPPED.".format(
+                        self.url))
                 sitemap_dict = {}
             sitemap_dict.update(d)
 
-    def update_filename(self, fi):
+    def update_filename(self):
         filebase = self.filename if not self.filename.endswith('.data') else \
             self.filename[:-5]
-        return "{}_{}.data".format(filebase, str(fi))
+        fi = str(self.filenameindex)
+        self.filenameindex += 1
+        return "{}_{}.data".format(filebase, fi)
 
 
 class XmlUrlset(XmlSitemap):
@@ -245,7 +260,7 @@ class XmlUrlset(XmlSitemap):
     unique_tag = 'url'
     # next = Rss
 
-    def _sitemap(self, sitemap_dict, fi):
+    def _sitemap(self, sitemap_dict):
         yield sitemap_dict
 
 
@@ -258,7 +273,7 @@ class XmlSitemapIndex(XmlSitemap):
     tag = ["loc", "lastmod", "changefreq"]
     name = ["links", "modified_time", "revisit"]
 
-    def _sitemap(self, sitemap_dict, fi):
+    def _sitemap(self, sitemap_dict):
         link = sitemap_dict['links']
         links = [
             self.base + r'/sitemaps/' + link.split(r'/')[-1],
@@ -268,7 +283,7 @@ class XmlSitemapIndex(XmlSitemap):
         sitemap = self._try_sitemap(
             links=links,
             klass=self.next,
-            filename=self.update_filename(fi)
+            filename=self.update_filename()
         )
         for link in sitemap:
             yield link
@@ -303,14 +318,18 @@ class GunZip(XmlSitemap):
     def fits_xml(self):
         return True
 
+    @property
+    def namespace(self):
+        return ''
+
     def _fitting_sitemap_iterator(self):
         zipped = GzipFile(filename=self.filename, mode='rb')
-        new_filename = self.update_filename(self.filename)
-        with open(new_filename) as new_file:
-            new_file.write(zipped.read())
+        new_filename = self.update_filename()
+        with open(new_filename, 'w') as new_file:
+            new_file.write(zipped.read().decode('utf-8'))
         os.remove(self.filename)
-        self.filename = new_filename
-        for link in self._next_sitemap_iterator(download=False):
+        for link in iter(self._next_sitemap_iterator(download=False,
+                                                     filename=new_filename)):
             yield link
 
 

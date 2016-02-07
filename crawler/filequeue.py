@@ -145,14 +145,16 @@ class FileQueue(object):
         return name
 
     def _touch(self, file_name, keep=False):
-        with open(file_name, self._filehandler_method('a') if keep else self._filehandler_method('w')):
+        method = self._filehandler_method('a') if keep else \
+            self._filehandler_method('w')
+        with open(file_name, method):
             os.utime(file_name)
 
     def _iterator(self):
         try_again = True
         while try_again:
-            with self.get_lock, \
-                    open(self.get_queue_name, self._filehandler_method('r')) as f:
+            with self.get_lock, open(self.get_queue_name,
+                                     self._filehandler_method('r')) as f:
                 if self.pickled:
                     while True:
                         try:

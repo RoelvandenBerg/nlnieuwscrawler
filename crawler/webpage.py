@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-__author__ = 'roelvdberg@gmail.com'
 
 from datetime import datetime as dt
 import dateutil.parser as dtparser
+import os
 import threading
 import urllib.parse
 import urllib.request as request
+import weakref
 
 from lxml import etree
 from sqlalchemy.orm.exc import NoResultFound
@@ -21,6 +22,7 @@ except ImportError:
     from crawler.settings import USER_AGENT_INFO, USER_AGENT
     import crawler.validate as validate
 
+__author__ = 'roelvdberg@gmail.com'
 
 logger = base.logger_setup(__name__)
 
@@ -36,6 +38,10 @@ def stringify(string):
         return str(string)
     else:
         return ""
+
+
+class WebpageError(Exception):
+    pass
 
 
 class Head(object):
@@ -151,7 +157,8 @@ class WebpageRaw(object):
     parser = etree.HTML
 
     def __init__(self, url, html=None, base=None, database_lock=None,
-                 encoding='utf-8', save_file=False, *args, **kwargs):
+                 encoding='utf-8', save_file=False, filename=None, *args,
+                 **kwargs):
         """
         Fetch all content from a site and store it in text format.
 
@@ -163,8 +170,11 @@ class WebpageRaw(object):
         :param url: the http-address of the website that is to be parsed.
         :param base: (optional) the base url that belongs to this url.
         """
-        filename = "../data/thread_" + str(threading.get_ident()) + '.data'
-        self.filename = filename
+        if filename:
+            self.filename = filename
+        else:
+            self.filename = "thread_{}.data".format(
+                str(threading.get_ident()))
         if not database_lock:
             self.database_lock = threading.RLock()
         else:
@@ -178,6 +188,9 @@ class WebpageRaw(object):
         self.encoding = encoding
         self.session = model.Session()
         self.save_to_disk = save_file
+        self._finalizer = weakref.finalize(self, self._remove)
+        self._iterator = iter(self.file_iter()) if save_file else iter(
+            self.memory_iter())
         self.fetch(*args, **kwargs)
         if self.head:
             self.head = Head(self.base_tree, self.html)
@@ -196,12 +209,16 @@ class WebpageRaw(object):
             not be downloaded. The parse method will look at the html content
             given on initialization.
         """
-        if self.save_to_disk:
-            urllib.request.urlretrieve(url, self.filename)
-            return
         if download and not self.html:
             if url is None:
                 url = self.url
+            if self.save_to_disk:
+                if self.html:
+                    return
+                urllib.request.urlretrieve(url, self.filename)
+                logger.debug('Saving {} to disk. Parsing from disk'.format(
+                             self.filename))
+                return
             data, header = self.agent
             url = validate.iri_to_uri(url)
             with request.urlopen(request.Request(url, headers=header)) \
@@ -212,6 +229,8 @@ class WebpageRaw(object):
                 content = response.read()
                 self.html = content.decode(self.encoding).encode(
                     'utf-8')
+        elif not download and not self.html:
+            return
         self.parse(*args, **kwargs)
 
     def parse(self, *args, **kwargs):
@@ -220,6 +239,97 @@ class WebpageRaw(object):
     @property
     def base_tree(self):
         return self.parser(self.html)
+
+    def file_iter(self):
+        """
+        fast_iter is useful if you need to free memory while iterating through a
+        very large XML file.
+
+        http://lxml.de/parsing.html#modifying-the-tree
+        Based on Liza Daly's fast_iter
+        http://www.ibm.com/developerworks/xml/library/x-hiperfparse/
+        See also http://effbot.org/zone/element-iterparse.htm
+
+        :returns: current tag, and a dictionary with values for each given
+            name. {name: value, ...}
+        """
+
+        with open(self.filename, 'rb') as fileobj:
+            has_attr = self.has_attributes
+            self.tag = [self.namespace + tag for tag in self.tag]
+            context = etree.iterparse(fileobj, events=('end',), tag=self.tag)
+            try:
+                for event, elem in context:
+                    if has_attr:
+                        yield elem.tag, {
+                                name: elem.attrib[attr] for attr, name in
+                                self.attr_name[elem.tag]
+                            }
+                    else:
+                        yield elem.tag, {
+                                self.name[self.tag.index(elem.tag)]: elem.text
+                            }
+                    # It's safe to call clear() here because no descendants will be
+                    # accessed
+                    elem.clear()
+                    # Also eliminate now-empty references from the root node to elem
+                    while elem.getprevious() is not None:
+                        del elem.getparent()[0]
+            except etree.XMLSyntaxError:
+                pass
+            del context
+            raise StopIteration
+            yield  # unreachable by design
+
+    def memory_iter(self):
+        """
+        Iterate over own attributes with stored elements.
+
+        :returns: current tag, and a dictionary with values for each given
+            name. {name: value, ...}
+        """
+        attrs = [(name, getattr(self, name)) for name in self.name]
+        try:
+            length = len(attrs[0][1])
+            if all(len(attrs[0][1]) == len(attrs[i][1]) for i in length):
+                raise WebpageError('Different lenghts')
+            for i in range(length):
+                yield {attr[0]: attr[1][i] for attr in attrs}
+        except TypeError:  # Dealing with generators:
+            while True:
+                try:
+                    yield {attr[0]: next(attr[1]) for attr in attrs}
+                except StopIteration:
+                    break
+
+    @property
+    def attr_name(self):
+        attributes = {}
+        for i, tag in enumerate(self.tags):
+            tag_attributes = attributes.get(tag, [])
+            tag_attributes.append((self.attr[i], self.name[i]))
+            attributes[tag] = tag_attributes
+        return attributes
+
+    @property
+    def has_attributes(self):
+        return bool(getattr(self, 'attr', False))
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._iterator)
+
+    def remove(self):
+        """Removes associated file."""
+        self._finalizer()
+
+    def _remove(self):
+        try:
+            os.remove(self.filename)
+        except FileNotFoundError:
+            pass
 
     def store(self):
         """
@@ -347,6 +457,17 @@ class WebpageRaw(object):
         return not any(robotsetting in self.head_robots for robotsetting in
                        self.robot_archive_options)
 
+    @property
+    def namespace(self):
+        try:
+            with open(self.filename, 'rb') as fileobj:
+                context = etree.iterparse(fileobj, events=('end',))
+                namespace = next(context)[1].nsmap
+                logger.debug('NAMESPACE: ' + str(namespace))
+                return "{" + namespace[None] + "}"
+        except (KeyError, etree.XMLSyntaxError):
+            return ""
+
 
 class Webpage(WebpageRaw):
     """
@@ -382,7 +503,7 @@ class Webpage(WebpageRaw):
     selector_method_name = "xpath"
 
     def __init__(self, url, html=None, base=None, database_lock=None,
-                 *args, **kwargs):
+                 encoding='utf-8', save_file=False, filename=None, **kwargs):
         """
         Fetch all content from a site and parse it.
 
@@ -403,8 +524,16 @@ class Webpage(WebpageRaw):
         if not isinstance(self.attr, list):
             self.attr = [self.attr]
             self.one_tag = True
-        super().__init__(url, html, base, database_lock, *args,
-                         **kwargs)
+        super().__init__(
+            url=url,
+            html=html,
+            base=base,
+            database_lock=database_lock,
+            encoding=encoding,
+            save_file=save_file,
+            filename=filename,
+            **kwargs
+        )
 
     def parse(self, *args, **kwargs):
         """
@@ -600,12 +729,6 @@ class Links(Webpage):
     tag = ["a", "a"]
     attr = ["href", "rel"]
     name = ["links", "robots"]
-    visited = []
-
-    def __init__(self, *args, **kwargs):
-        self._f_iter = iter(self.fast_iter())
-        self._l_iter = iter(self.link_iter())
-        super().__init__(*args, **kwargs)
 
     def parse_edit(self):
         """
@@ -614,47 +737,14 @@ class Links(Webpage):
         robot_nofollow = self.robot_archive_options + ['nofollow']
         self.links = (link for i, link in enumerate(self.links) if validate.url(
             link) and not self.robots[i] in robot_nofollow)
+        self.name = ["links"]
 
-    def fast_iter(self):
-        """
-        fast_iter is useful if you need to free memory while iterating through a
-        very large XML file.
-
-        http://lxml.de/parsing.html#modifying-the-tree
-        Based on Liza Daly's fast_iter
-        http://www.ibm.com/developerworks/xml/library/x-hiperfparse/
-        See also http://effbot.org/zone/element-iterparse.htm
-        """
-        with open(self.filename, 'rb') as fileobj:
-            context = etree.iterparse(fileobj, events=('end',), tag='a')
-            for event, elem in context:
-                yield elem.attrib['href']
-                # It's safe to call clear() here because no descendants will be
-                # accessed
-                elem.clear()
-                # Also eliminate now-empty references from the root node to elem
-                for ancestor in elem.xpath('ancestor-or-self::*'):
-                    while ancestor.getprevious() is not None:
-                        del ancestor.getparent()[0]
-            del context
+    def __init__(self, *args, **kwargs):
+        self.visited = []
+        super().__init__(*args, **kwargs)
 
     def link_iter(self):
         for link in self.links:
             if link not in self.visited:
-                yield link
+                yield {'links': link}
                 self.visited.append(link)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        """
-        Iterate over self.links or a given saved html-file.
-
-        Only yield a sitemap url when it has not yet been visited. Only add
-        sitemaps when full sitemaps are encountered.
-        """
-        if self.save_to_disk:
-            return next(self._f_iter)
-        else:
-            return next(self._l_iter)

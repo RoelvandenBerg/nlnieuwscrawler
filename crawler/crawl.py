@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 
 try:
-    import base
+    import base as base_
     from filequeue import Empty
     import model
     import robot
@@ -17,7 +17,7 @@ try:
     import validate
     import webpage
 except ImportError:
-    import crawler.base as base
+    import crawler.base as base_
     from crawler.filequeue import Empty
     import crawler.model as model
     import crawler.robot as robot
@@ -27,7 +27,7 @@ except ImportError:
 
 
 logging.basicConfig(filename=LOG_FILENAME, level=logging.DEBUG)
-logger = base.logger_setup(__name__)
+logger = base_.logger_setup(__name__)
 logger.debug("NEW_CRAWL_RUN | " + dt.now().strftime('%H:%M | %d-%m-%Y |'))
 
 
@@ -80,7 +80,7 @@ class Website(object):
         if base_url:
             self.base_url = base_url
         else:
-            self.base_url = base.BaseUrl(base=base,
+            self.base_url = base_.BaseUrl(base=base,
                                          database_lock=self.database_lock)
         self.robot_txt = robot.Txt(
             url=urllib.parse.urljoin(base, 'robots.txt'),
@@ -89,17 +89,12 @@ class Website(object):
         self.robot_txt.read()
         self.links = link_queue
         self.depth = depth
-        try:
-            logger.debug('SITEMAP FOUND WITH {} LINKS.'.format(
-                len(self.robot_txt.sitemap.links)))
-            self.base_url.add_links(
-                link_container=self.robot_txt.sitemap,
-                depth=self.depth,
-                base=self.base
-            )
-            logger.debug('SITEMAP FOUND FOR: ' + self.base)
-        except AttributeError:
-            logger.debug('SITEMAP _NOT_ FOUND FOR: ' + self.base)
+        self.base_url.add_links(
+            link_container=self.robot_txt.sitemap,
+            depth=self.depth,
+            base=self.base
+        )
+        logger.debug('SITEMAP READ FOR: ' + self.base)
         self.webpage = page
 
     def _can_fetch(self, url_):
@@ -189,7 +184,7 @@ class Crawler(object):
         :param page: webpage class used for crawling
         """
         self.database_lock = threading.RLock()
-        self.base_url = base.BaseUrl(sitelist, self.database_lock)
+        self.base_url = base_.BaseUrl(sitelist, self.database_lock)
         self.websites = []
         self.webpage = page
 
@@ -209,12 +204,12 @@ class Crawler(object):
                     )
                     thread.start()
                 except Empty:
-                    logger.debug("Queue of base urls is empty.")
+                    pass #logger.debug("Queue of base urls is empty.")
                 number_of_website_threads = threading.activeCount() - 1
-                logger.debug(
-                    "CRAWLER: Number of threads with websites running: {}"
-                    .format(number_of_website_threads)
-                )
+                # logger.debug(
+                #     "CRAWLER: Number of threads with websites running: {}"
+                #     .format(number_of_website_threads)
+                # )
         logger.debug("CRAWLER: Finished")
         logger.debug("CRAWLER:\n" + repr(self.base_url))
 

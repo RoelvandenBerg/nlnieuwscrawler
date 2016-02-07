@@ -93,7 +93,8 @@ class BaseUrl(list):
         sites = self.load_from_database()
         self.load_from_db = False
         for base_url in base:
-            if base_url not in sites and base_url + '/' not in sites:
+            if base_url not in sites and base_url + '/' not in sites and \
+                    base_url not in self.history:
                 self.append(base_url, 0)
 
     def load_from_database(self):
@@ -101,7 +102,8 @@ class BaseUrl(list):
         sitelist = []
         for site in sites:
             sitelist.append(site.url)
-            self.append(site.url, site.crawl_depth)
+            if not site.url in self.history:
+                self.append(site.url, site.crawl_depth)
         pages = self.session.query(model.Webpage).all()
         now = dt.now()
         for page in pages:
@@ -198,13 +200,13 @@ class BaseUrl(list):
                     overwrite=True,
                     pickled=False
                 )
-                link_queue.put(url)
                 self.add_to_history(url)
+                link_queue.put(url)
                 # base urls are added to the crawl queue only if set in
                 # settings:
                 if ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE:
-                    link_queue.put(base)
                     self.add_to_history(base)
+                    link_queue.put(base)
                 self[depth][base] = link_queue
                 self.base_queue.put((base, depth))
                 if not self.load_from_db:
@@ -223,23 +225,18 @@ class BaseUrl(list):
         number_of_links = 0
         if not base:
             base = self.base[0]
-        try:
-            for url in link_container:
-                if "#" in url:
-                    url = url.split('#')[0]
-                    if not len(url):
-                        continue
-                if not url.startswith("http"):
-                    url = urllib.parse.urljoin(base, url)
-                if not validate.url_explicit(url):
+        # try:
+        for url_dict in link_container:
+            url = url_dict['links']
+            if "#" in url:
+                url = url.split('#')[0]
+                if not len(url):
                     continue
-                self.add(url, depth)
-                number_of_links += 1
-        except AttributeError:
-            logger.debug(
-                'AttributeError while iterating over links @base {}'.format(
-                    number_of_links, base)
-            )
+            url = urllib.parse.urljoin(base, url)
+            if not validate.url_explicit(url):
+                continue
+            self.add(url, depth)
+            number_of_links += 1
         logger.debug('{} links added @base {} .'.format(
             number_of_links, base))
 
