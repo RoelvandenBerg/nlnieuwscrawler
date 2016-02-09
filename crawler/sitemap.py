@@ -155,13 +155,13 @@ class SitemapMixin(object):
     @property
     def fits_xml(self):
         with open(self.filename, 'rb') as fileobj:
-             context = etree.iterparse(fileobj, events=('end',),
-                                       tag=self.unique_tag)
-             try:
-                 next(context)
-                 return True
-             except StopIteration:
-                 return False
+            context = etree.iterparse(fileobj, events=('end',),
+                                   tag=self.unique_tag)
+            try:
+                next(context)
+                return True
+            except (StopIteration, etree.XMLSyntaxError):
+                return False
 
 
 # class Rss(SitemapMixin, webpage.Webpage):

@@ -138,7 +138,7 @@ class Website(object):
                     url=link,
                     base=self.base,
                     database_lock=self.database_lock,
-                    encoding=self.encoding[0]
+                    encoding=self.encoding[-1]
                 )
             except urllib.error.HTTPError:
                 logger.debug('WEBSITE: HTTP error @ {}'.format(link))
@@ -148,7 +148,7 @@ class Website(object):
                 time.sleep(CRAWL_DELAY)
                 continue
             break
-        if page.encoding != self.encoding[0]:
+        if page.encoding != self.encoding[-1]:
             self.encoding.append(page.encoding)
         if page.followable:
             urlfetcher = webpage.Links(url=link, base=self.base,
