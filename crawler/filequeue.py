@@ -148,7 +148,7 @@ class FileQueue(object):
         method = self._filehandler_method('a') if keep else \
             self._filehandler_method('w')
         with open(file_name, method):
-            os.utime(file_name)
+            os.utime(file_name, None)
 
     def _iterator(self):
         try_again = True
