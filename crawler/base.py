@@ -5,7 +5,8 @@ import threading
 import urllib.error
 import urllib.parse
 
-import pybloof
+# import pybloof
+import pybloom.pybloom
 
 __author__ = 'roelvdberg@gmail.com'
 
@@ -69,10 +70,12 @@ class BaseUrl(list):
         :param base: either a string with a base url or a list of strings with
             base urls.
         """
-        self.history = pybloof.StringBloomFilter(
-            size=bloomfilter_size,
-            hashes=bloomfilter_hashes
-        )
+        self.history = pybloom.pybloom.BloomFilter(capacity=bloomfilter_max,
+                                           error_rate=0.0001)
+        # self.history = pybloof.StringBloomFilter(
+        #     size=bloomfilter_size,
+        #     hashes=bloomfilter_hashes
+        # )
         self.total_stored = 0
         self.max = bloomfilter_max
         self.database_lock = database_lock
