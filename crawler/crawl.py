@@ -25,7 +25,7 @@ except ImportError:
     import crawler.validate as validate
     import crawler.webpage as webpage
 
-import queue.Empty as Empty
+from queue import Empty
 
 logging.basicConfig(filename=LOG_FILENAME, level=logging.DEBUG)
 logger = base_.logger_setup(__name__)
