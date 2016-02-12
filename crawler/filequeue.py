@@ -19,7 +19,7 @@ def _touch(file_name, pickled=False, keep=False):
 
 def _remove(put_queue_name, get_queue_name, _puttable, persistent, pickled,
             get_pos, initial_get_queue_name, initial_put_queue_name):
-    print('deleting')
+    print('#####   deleting filequeue')
     if _puttable:
         if not persistent:
             os.remove(put_queue_name)
@@ -92,7 +92,6 @@ class FileQueue(object):
         :param pickled: uses pickle by default to serialize the items. When
             the items are strings only, pickled can be set to False.
         """
-        print('__init__')
         self.pickled = pickled
         if name:
             self.name_base = name
@@ -120,7 +119,6 @@ class FileQueue(object):
             self._puttable, self.persistent, self.pickled, self.get_pos,
             self.initial_get_queue_name, self.initial_put_queue_name
         )
-        print(self._finalizer)
 
 
     def put(self, item):
