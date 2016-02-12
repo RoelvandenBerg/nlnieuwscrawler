@@ -20,6 +20,7 @@ except ImportError:
     from crawler.settings import *
     import crawler.validate as validate
 
+from queue import Queue as FileQueue
 
 def logger_setup(name):
     # setup logger
