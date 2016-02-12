@@ -20,7 +20,6 @@ except ImportError:
     from crawler.settings import *
     import crawler.validate as validate
 
-from queue import Queue as FileQueue
 
 def logger_setup(name):
     # setup logger
@@ -83,10 +82,10 @@ class BaseUrl(list):
         self += [{} for _ in range(CRAWL_DEPTH + 1)]
         self.lock = threading.RLock()
         self.base_queue = FileQueue(
-            # directory="../data",
-            # name='base_url',
-            # persistent=True,
-            # overwrite=True
+            directory="../data",
+            name='base_url',
+            persistent=True,
+            overwrite=True
         )
         if isinstance(base, str):
             base = [base]
@@ -195,11 +194,11 @@ class BaseUrl(list):
                 else:
                     queue_name = base
                 link_queue = FileQueue(
-                    # directory="../data",
-                    # name=queue_name,
-                    # persistent=True,
-                    # overwrite=True,
-                    # pickled=False
+                    directory="../data",
+                    name=queue_name,
+                    persistent=True,
+                    overwrite=True,
+                    pickled=False
                 )
                 self.add_to_history(url)
                 link_queue.put(url)
