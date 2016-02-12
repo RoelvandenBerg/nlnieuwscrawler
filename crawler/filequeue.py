@@ -6,6 +6,48 @@ import weakref
 __author__ = 'roelvdberg@gmail.com'
 
 
+def _file_method(method, pickled=False):
+    return method + 'b' if pickled else method
+
+
+def _touch(file_name, pickled=False, keep=False):
+    method = _file_method('a', pickled) if keep else \
+        _file_method('w', pickled)
+    with open(file_name, method):
+        os.utime(file_name, None)
+
+
+def _remove(put_queue_name, get_queue_name, _puttable, persistent, pickled,
+            get_pos, initial_get_queue_name, initial_put_queue_name):
+    print('deleting')
+    if _puttable:
+        if not persistent:
+            os.remove(put_queue_name)
+            os.remove(get_queue_name)
+        else:
+            method = 'ab' if pickled else 'a'
+            with open(put_queue_name, method) as put_queue, \
+                    open(get_queue_name, _file_method('r', pickled)) as f:
+                if pickled:
+                    for _ in range(get_pos):
+                        pickle.load(f)
+                    while True:
+                        try:
+                            pickle.dump(pickle.load(f), put_queue)
+                        except EOFError:
+                            break
+                else:
+                    for _ in range(get_pos):
+                        next(f)
+                    for line in f:
+                        put_queue.write(line.strip('\n') + '\n')
+            _touch(get_queue_name, pickled=pickled)
+            if get_queue_name != initial_get_queue_name or \
+                    put_queue_name != initial_put_queue_name:
+                os.rename(get_queue_name, initial_get_queue_name)
+                os.rename(put_queue_name, initial_put_queue_name)
+
+
 class FileQueueError(Exception):
     pass
 
@@ -30,8 +72,8 @@ class FileQueue(object):
         Low memory FIFO queue that keeps queue on disk.
 
         Queue is stored in two files:
-        'get_thread_[thread-id or given name]_[id].queue'
-        'put_thread_[thread-id or given name]_[id].queue'
+        '0_thread_[thread-id or given name]_[id].queue'
+        '1_thread_[thread-id or given name]_[id].queue'
 
         The former (read) is used for reading the queue and gets filled with the
         latter (put) when empty. The latter (put) is used to put new items into
@@ -50,6 +92,7 @@ class FileQueue(object):
         :param pickled: uses pickle by default to serialize the items. When
             the items are strings only, pickled can be set to False.
         """
+        print('__init__')
         self.pickled = pickled
         if name:
             self.name_base = name
@@ -61,15 +104,24 @@ class FileQueue(object):
         self.directory = directory.rstrip('/') + '/' if len(directory) else ""
         if not os.path.exists(self.directory) and self.directory:
             os.makedirs(self.directory)
-        self.put_queue_name = self._filename('put')
-        self.get_queue_name = self._filename('get')
+        self.put_queue_name = self._filename('0')
+        self.get_queue_name = self._filename('1')
+        self.initial_put_queue_name = self.put_queue_name
+        self.initial_get_queue_name = self.get_queue_name
         self.put_lock = threading.Lock()
         self.get_lock = threading.Lock()
         self.iterator = iter(self._iterator())
-        self._finalizer = weakref.finalize(self, self._remove)
         self.get_queue_length = 0
         self.put_queue_length = 0
         self._puttable = True
+        self.get_pos = 0
+        self._finalizer = weakref.finalize(
+            self, _remove, self.put_queue_name, self.get_queue_name,
+            self._puttable, self.persistent, self.pickled, self.get_pos,
+            self.initial_get_queue_name, self.initial_put_queue_name
+        )
+        print(self._finalizer)
+
 
     def put(self, item):
         """
@@ -80,7 +132,7 @@ class FileQueue(object):
         if not self._puttable:
             raise Empty('Putting to emptied queue is not allowed.')
         with self.put_lock:
-            with open(self.put_queue_name, self._filehandler_method('a')) as f:
+            with open(self.put_queue_name, self._file_method('a')) as f:
                 if self.pickled:
                     pickle.dump(item, f)
                 else:
@@ -124,45 +176,45 @@ class FileQueue(object):
         """
         return len(self) == 0
 
-    def remove(self):
-        """
-        Removes queue files when persistent or puts them in a reusable state.
-
-        Files are made reusable by moving all items from get-file to put-file.
-        """
-        self._finalizer()
+    # def __del__(self):
+    #     self._finalizer()
+    #
+    # def remove(self):
+    #     self._finalizer()
 
     def _filename(self, file_type):
         name = self.directory + file_type + '_thread_' + self.name_base + \
-               '_'+ self.id + '.queue'
+               '_' + self.id + '.queue'
         while os.path.exists(name) and not self.overwrite:
             split_name = name.split('_')
             s_name = split_name[:-1]
             id_ = int(split_name[-1].split('.')[0]) + 1
             s_name.append(str(id_) + '.queue')
             name = '_'.join(s_name)
-        self._touch(file_name=name, keep=self.persistent)
+        _touch(file_name=name, pickled=self.pickled, keep=self.persistent)
         return name
 
-    def _touch(self, file_name, keep=False):
-        method = self._filehandler_method('a') if keep else \
-            self._filehandler_method('w')
-        with open(file_name, method):
-            os.utime(file_name, None)
+    def _file_method(self, method):
+        return _file_method(method, self.pickled)
+
 
     def _iterator(self):
         try_again = True
         while try_again:
             with self.get_lock, open(self.get_queue_name,
-                                     self._filehandler_method('r')) as f:
+                                     self._file_method('r')) as f:
                 if self.pickled:
                     while True:
                         try:
-                            yield pickle.load(f)
+                            self.get_pos += 1
+                            unpickled = pickle.load(f)
+                            self.get_queue_length -= 1
+                            yield unpickled
                         except EOFError:
                             break
                 else:
                     for line in f:
+                        self.get_pos += 1
                         self.get_queue_length -= 1
                         yield line.strip('\n')
             try_again = self._move_strings_to_get_file()
@@ -179,49 +231,18 @@ class FileQueue(object):
                     self.get_queue_length = 0
                 else:
                     raise FileQueueError('Moving strings to "get" while it is '
-                                         'not completely read.')
-            self._touch(self.get_queue_name)
-            added_length = self._move(from_=self.put_queue_name,
-                                                 to=self.get_queue_name)
-            self.get_queue_length += added_length
-            try_again = bool(added_length)
-            self._touch(self.put_queue_name)
+                                         'not completely read. pos = {}, '
+                                         'get_queue_length = {}'.format(
+                        self.get_pos, self.get_queue_length))
+            _touch(self.get_queue_name, pickled=self.pickled)
+            self.get_queue_length = self.put_queue_length
             self.put_queue_length = 0
+            self.get_pos = 0
+            get_queue_name_old = self.get_queue_name
+            self.get_queue_name = self.put_queue_name
+            self.put_queue_name = get_queue_name_old
+            try_again = bool(self.get_queue_length)
         return try_again
-
-    def _move(self, from_, to):
-        i = 0
-        with open(from_, self._filehandler_method('r')) as from_file, \
-                open(to, self._filehandler_method('a')) as to_file:
-            if self.pickled:
-                while True:
-                    try:
-                        pickle.dump(pickle.load(from_file), to_file)
-                        i += 1
-                    except EOFError:
-                        break
-            else:
-                for line in from_file:
-                    to_file.write(line)
-                    i += 1
-        return i
-
-    def _remove(self):
-        if self._puttable:
-            if not self.persistent:
-                os.remove(self.put_queue_name)
-                os.remove(self.get_queue_name)
-            else:
-                with open(self.put_queue_name, self._filehandler_method('a')) as put_queue:
-                    for _ in range(self.get_queue_length):
-                        if self.pickled:
-                            pickle.dump(self.get(), put_queue)
-                        else:
-                            put_queue.write(self.get() + '\n')
-                self._touch(self.get_queue_name)
-
-    def _filehandler_method(self, method):
-        return method + 'b' if self.pickled else method
 
     def __next__(self):
         next_ = next(self.iterator)
