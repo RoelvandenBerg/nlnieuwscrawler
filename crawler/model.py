@@ -98,3 +98,10 @@ if __name__ == '__main__':
     print('create_all')
     print('sqlite:///' + DATABASE_FILENAME)
     create_all()
+    try:
+        for f in os.listdir('../data'):
+            os.remove('../data/' + f)
+        os.removedirs('../data')
+        os.makedirs('../data')
+    except Exception as e:
+        print(e)

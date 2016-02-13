@@ -10,6 +10,7 @@ import weakref
 
 from lxml import etree
 from sqlalchemy.orm.exc import NoResultFound
+import pybloom.pybloom
 
 try:
     import base
@@ -38,6 +39,44 @@ def stringify(string):
         return str(string)
     else:
         return ""
+
+
+def _remove(filename):
+    try:
+        os.remove(filename)
+    except FileNotFoundError:
+        pass
+
+
+def file_iter(filename, tags):
+    """
+    fast_iter is useful if you need to free memory while iterating through a
+    very large XML file.
+
+    http://lxml.de/parsing.html#modifying-the-tree
+    Based on Liza Daly's fast_iter
+    http://www.ibm.com/developerworks/xml/library/x-hiperfparse/
+    See also http://effbot.org/zone/element-iterparse.htm
+
+    :returns: current tag, and a dictionary with values for each given
+        name. {name: value, ...}
+    """
+    if not isinstance(tags, list):
+        tags = [tags]
+    with open(filename, 'rb') as fileobj:
+        context = etree.iterparse(fileobj, events=('end',), tag=tags)
+        try:
+            for event, elem in context:
+                yield elem
+                # It's safe to call clear() here because no descendants will be
+                # accessed
+                elem.clear()
+                # Also eliminate now-empty references from the root node to elem
+                while elem.getprevious() is not None:
+                    del elem.getparent()[0]
+        except etree.XMLSyntaxError:
+            pass
+        del context
 
 
 class WebpageError(Exception):
@@ -77,17 +116,16 @@ class Head(object):
         )
     }
 
-    def __init__(self, htmltree, html):
+    def __init__(self, html, from_disk=True, filename=""):
         """
         Initialize root with htmltree at head location.
 
         :param htmltree: lxml etree object of a webpage.
         """
-        try:
-            self.root = htmltree.xpath(self.location)[0]
-        except IndexError:
-            self.root = []
-        self.htmltree = htmltree
+        if from_disk and filename:
+            self.root = file_iter(filename, self.tags.keys())
+        else:
+            self.root = ()
         self.html = html
 
     def parse(self):
@@ -173,7 +211,7 @@ class WebpageRaw(object):
         if filename:
             self.filename = filename
         else:
-            self.filename = "thread_{}.data".format(
+            self.filename = "../data/thread_{}.data".format(
                 str(threading.get_ident()))
         if not database_lock:
             self.database_lock = threading.RLock()
@@ -188,12 +226,13 @@ class WebpageRaw(object):
         self.encoding = encoding
         self.session = model.Session()
         self.save_to_disk = save_file
-        self._finalizer = weakref.finalize(self, self._remove)
+        self._finalizer = weakref.finalize(self, _remove, self.filename)
         self._iterator = iter(self.file_iter()) if save_file else iter(
             self.memory_iter())
         self.fetch(*args, **kwargs)
         if self.head:
-            self.head = Head(self.base_tree, self.html)
+            self.head = Head(html=self.html, from_disk=self.save_to_disk,
+                             filename=self.filename)
             self.head.parse()
 
     def fetch(self, url=None, download=True, *args, **kwargs):
@@ -213,8 +252,6 @@ class WebpageRaw(object):
             if url is None:
                 url = self.url
             if self.save_to_disk:
-                if self.html:
-                    return
                 urllib.request.urlretrieve(url, self.filename)
                 logger.debug('Saving {} to disk. Parsing from disk'.format(
                              self.filename))
@@ -236,50 +273,17 @@ class WebpageRaw(object):
     def parse(self, *args, **kwargs):
         pass
 
-    @property
-    def base_tree(self):
-        return self.parser(self.html)
-
     def file_iter(self):
-        """
-        fast_iter is useful if you need to free memory while iterating through a
-        very large XML file.
-
-        http://lxml.de/parsing.html#modifying-the-tree
-        Based on Liza Daly's fast_iter
-        http://www.ibm.com/developerworks/xml/library/x-hiperfparse/
-        See also http://effbot.org/zone/element-iterparse.htm
-
-        :returns: current tag, and a dictionary with values for each given
-            name. {name: value, ...}
-        """
-
-        with open(self.filename, 'rb') as fileobj:
-            has_attr = self.has_attributes
-            self.tag = [self.namespace + tag for tag in self.tag]
-            context = etree.iterparse(fileobj, events=('end',), tag=self.tag)
-            try:
-                for event, elem in context:
-                    if has_attr:
-                        yield elem.tag, {
-                                name: elem.attrib[attr] for attr, name in
-                                self.attr_name[elem.tag]
-                            }
-                    else:
-                        yield elem.tag, {
-                                self.name[self.tag.index(elem.tag)]: elem.text
-                            }
-                    # It's safe to call clear() here because no descendants will be
-                    # accessed
-                    elem.clear()
-                    # Also eliminate now-empty references from the root node to elem
-                    while elem.getprevious() is not None:
-                        del elem.getparent()[0]
-            except etree.XMLSyntaxError:
-                pass
-            del context
-            raise StopIteration
-            yield  # unreachable by design
+        has_attr = self.has_attributes
+        self.tag = [self.namespace + tag for tag in self.tag]
+        for elem in file_iter(self.filename, self.tag):
+            if has_attr:
+                yield {
+                    name: elem.attrib[attr] for attr, name in
+                    self.attr_name[elem.tag]
+                }
+            else:
+                yield {self.name[self.tag.index(elem.tag)]: elem.text}
 
     def memory_iter(self):
         """
@@ -324,12 +328,6 @@ class WebpageRaw(object):
     def remove(self):
         """Removes associated file."""
         self._finalizer()
-
-    def _remove(self):
-        try:
-            os.remove(self.filename)
-        except FileNotFoundError:
-            pass
 
     def store(self):
         """
@@ -463,7 +461,7 @@ class WebpageRaw(object):
             with open(self.filename, 'rb') as fileobj:
                 context = etree.iterparse(fileobj, events=('end',))
                 namespace = next(context)[1].nsmap
-                logger.debug('NAMESPACE: ' + str(namespace))
+                # logger.debug('NAMESPACE: ' + str(namespace))
                 return "{" + namespace[None] + "}"
         except (KeyError, etree.XMLSyntaxError):
             return ""
@@ -628,17 +626,6 @@ class Webpage(WebpageRaw):
         return stringify(element.text) + "".join(children)
 
 
-class Empty(WebpageRaw):
-    """
-    Empty webpage class that can serve as a dummy class for Crawler.
-    Using this, the crawler will work in its purest form: only harvesting
-    hyperlinks.
-    """
-
-    def parse(self, selector_string=None, selector_method_name="xpath"):
-        self.base_tree = self.parser(self.html)
-
-
 class Text(Webpage):
     """
     Fetches content from webpage by url and returns its text.
@@ -730,20 +717,29 @@ class Links(Webpage):
     attr = ["href", "rel"]
     name = ["links", "robots"]
 
-    def parse_edit(self):
-        """
-        When parsing, validate url. And check links for nofollow.
-        """
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.visited = pybloom.pybloom.BloomFilter(capacity=2000,
+                                                   error_rate=0.001)
+
+    def file_iter(self):
+        robot_nofollow = self.robot_archive_options + ['nofollow']
+        self.tag = [self.namespace + tag for tag in self.tag]
+        for elem in file_iter(self.filename, self.tag):
+            link = elem.attrib.get('href')
+            robots = elem.attrib.get('robots')
+            if link and link not in self.visited and robots not in \
+                    robot_nofollow :
+                yield {'links': link}
+            self.visited.add(link)
+        del self.visited
+
+
+    def memory_iter(self):
         robot_nofollow = self.robot_archive_options + ['nofollow']
         self.links = (link for i, link in enumerate(self.links) if validate.url(
             link) and not self.robots[i] in robot_nofollow)
         self.name = ["links"]
-
-    def __init__(self, *args, **kwargs):
-        self.visited = []
-        super().__init__(*args, **kwargs)
-
-    def link_iter(self):
         for link in self.links:
             if link not in self.visited:
                 yield {'links': link}

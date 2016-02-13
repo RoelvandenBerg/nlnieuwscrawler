@@ -54,6 +54,7 @@ class Sitemap(object):
             sitemap = self.choose(url)
             for content in sitemap:
                 yield content
+            del sitemap
         self.iterable = False
         raise StopIteration
         yield
@@ -223,12 +224,13 @@ class XmlSitemap(SitemapMixin, webpage.Webpage):
         sitemap_dict = {}
         while True:
             try:
-                tag, d = next(self._iterator)
+                d = next(self._iterator)
             except StopIteration:
                 iterator = iter(self._sitemap(sitemap_dict))
                 try:
                     for link in iterator:
                         yield link
+                    del iterator
                 except urllib.error.HTTPError:
                     logger.debug("SITEMAP @ {} DOESN'T EXIST; SKIPPED.".format(
                         self.url))
@@ -239,6 +241,7 @@ class XmlSitemap(SitemapMixin, webpage.Webpage):
                 try:
                     for link in iterator:
                         yield link
+                    del iterator
                 except urllib.error.HTTPError:
                     logger.debug("SITEMAP @ {} DOESN'T EXIST; SKIPPED.".format(
                         self.url))

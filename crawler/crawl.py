@@ -107,12 +107,17 @@ class Website(object):
 
     def run(self):
         """Runs a website crawler."""
-        while self.has_content:
+        for _ in range(3):
+            if not self.has_content:
+                break
             start_time = time.time()
             try:
                 self._run_once()
             except Empty:
                 self.has_content = False
+            except Exception as e:
+                logger.exception("Error: {} @webpage with base {}".format(
+                    e, self.base))
             try:
                 wait_time_left = self.robot_txt.crawl_delay + start_time - \
                              time.time()
@@ -133,12 +138,16 @@ class Website(object):
                          .format(link))
             return
         while True:
+            filename = '../data/thread_{}_{}.data'.format(
+                self.base.split('.')[-2].split('/')[-1], link.split('/')[-1])
             try:
                 page = self.webpage(
                     url=link,
                     base=self.base,
                     database_lock=self.database_lock,
-                    encoding=self.encoding[-1]
+                    encoding=self.encoding[-1],
+                    save_file=True,
+                    filename=filename
                 )
             except urllib.error.HTTPError:
                 logger.debug('WEBSITE: HTTP error @ {}'.format(link))
@@ -151,13 +160,20 @@ class Website(object):
         if page.encoding != self.encoding[-1]:
             self.encoding.append(page.encoding)
         if page.followable:
-            urlfetcher = webpage.Links(url=link, base=self.base,
-                                       html=page.html, download=False)
+            urlfetcher = webpage.Links(
+                url=link,
+                base=self.base,
+                html=page.html,
+                download=False,
+                save_file=True,
+                filename=page.filename
+            )
             self.base_url.add_links(
                 link_container=urlfetcher,
                 depth=self.depth,
                 base=self.base
             )
+            del urlfetcher
         else:
             logger.debug('WEBSITE: webpage not followable: {}'.format(link))
         if page.archivable:
@@ -169,8 +185,7 @@ class Website(object):
                         .format(link))
         else:
             logger.warn('WEBSITE: webpage not archivable: {}'.format(link))
-        if VERBOSE:
-            logger.debug(page.content)
+        del page
 
 
 class Crawler(object):
