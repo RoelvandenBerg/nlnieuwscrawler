@@ -41,7 +41,7 @@ def stringify(string):
         return ""
 
 
-def _remove(filename):
+def remove_file(filename):
     try:
         os.remove(filename)
     except FileNotFoundError:
@@ -195,8 +195,8 @@ class WebpageRaw(object):
     parser = etree.HTML
 
     def __init__(self, url, html=None, base=None, database_lock=None,
-                 encoding='utf-8', save_file=False, filename=None, *args,
-                 **kwargs):
+                 encoding='utf-8', save_file=False, filename=None,
+                 persistent=False, *args, **kwargs):
         """
         Fetch all content from a site and store it in text format.
 
@@ -226,7 +226,8 @@ class WebpageRaw(object):
         self.encoding = encoding
         self.session = model.Session()
         self.save_to_disk = save_file
-        self._finalizer = weakref.finalize(self, _remove, self.filename)
+        self._finalizer = weakref.finalize(
+            self, remove_file, self.filename if not persistent else "")
         self._iterator = iter(self.file_iter()) if save_file else iter(
             self.memory_iter())
         self.fetch(*args, **kwargs)
@@ -386,8 +387,13 @@ class WebpageRaw(object):
                 timestr = self.find_in_head(time)
                 if timestr:
                     times[time] = dtparser.parse(timestr, dayfirst=True)
+            if self.save_to_disk:
+                with open(self.filename, 'rb') as f:
+                    content = f.read().decode(self.encoding)
+            else:
+                content = self.html
             head_item = model.Webpage(
-                content=self.html,
+                content=content,
                 crawl_created=self.webpage_created,
                 crawl_modified=datetimenow,
                 url=self.url,

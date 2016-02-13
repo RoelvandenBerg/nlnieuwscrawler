@@ -16,6 +16,7 @@ try:
     from settings import *
     import validate
     import webpage
+    from webpage import remove_file
 except ImportError:
     import crawler.base as base_
     from crawler.filequeue import Empty
@@ -24,7 +25,7 @@ except ImportError:
     from crawler.settings import *
     import crawler.validate as validate
     import crawler.webpage as webpage
-
+    from crawler.webpage import remove_file
 
 logging.basicConfig(filename=LOG_FILENAME, level=logging.DEBUG)
 logger = base_.logger_setup(__name__)
@@ -86,7 +87,11 @@ class Website(object):
             url=urllib.parse.urljoin(base, 'robots.txt'),
             base_url=self.base_url
         )
-        self.robot_txt.read()
+        try:
+            self.robot_txt.read()
+        except Exception as e:
+            logger.exception("Error: {} @webpage with base {}".format(
+                e, self.base))
         self.links = link_queue
         self.depth = depth
         self.base_url.add_links(
@@ -137,9 +142,9 @@ class Website(object):
             logger.debug('WEBSITE: webpage {} cannot be fetched.'
                          .format(link))
             return
+        filename = '../data/thread_{}_{}.data'.format(
+            self.base.split('.')[-2].split('/')[-1], link.split('/')[-1])
         while True:
-            filename = '../data/thread_{}_{}.data'.format(
-                self.base.split('.')[-2].split('/')[-1], link.split('/')[-1])
             try:
                 page = self.webpage(
                     url=link,
@@ -147,44 +152,48 @@ class Website(object):
                     database_lock=self.database_lock,
                     encoding=self.encoding[-1],
                     save_file=True,
-                    filename=filename
+                    filename=filename,
+                    persistent=True
                 )
+                if page.followable:
+                    urlfetcher = webpage.Links(
+                        url=link,
+                        base=self.base,
+                        html=page.html,
+                        download=False,
+                        save_file=True,
+                        filename=page.filename,
+                        persistent=True
+                    )
+                    self.base_url.add_links(
+                        link_container=urlfetcher,
+                        depth=self.depth,
+                        base=self.base
+                    )
+                else:
+                    logger.debug('WEBSITE: webpage not followable: {}'.format(link))
+                if page.archivable:
+                    try:
+                        page.store()
+                    except (TypeError, AttributeError):
+                        logger.debug(
+                            'WEBSITE: store content not working for page: {}'
+                                .format(link))
+                else:
+                    logger.warn('WEBSITE: webpage not archivable: {}'.format(link))
             except urllib.error.HTTPError:
                 logger.debug('WEBSITE: HTTP error @ {}'.format(link))
+                remove_file(filename)
                 return
             except UnicodeDecodeError:
                 self.encoding.pop()
                 time.sleep(CRAWL_DELAY)
                 continue
             break
+        remove_file(filename)
         if page.encoding != self.encoding[-1]:
             self.encoding.append(page.encoding)
-        if page.followable:
-            urlfetcher = webpage.Links(
-                url=link,
-                base=self.base,
-                html=page.html,
-                download=False,
-                save_file=True,
-                filename=page.filename
-            )
-            self.base_url.add_links(
-                link_container=urlfetcher,
-                depth=self.depth,
-                base=self.base
-            )
-            del urlfetcher
-        else:
-            logger.debug('WEBSITE: webpage not followable: {}'.format(link))
-        if page.archivable:
-            try:
-                page.store()
-            except (TypeError, AttributeError):
-                logger.debug(
-                    'WEBSITE: store content not working for page: {}'
-                        .format(link))
-        else:
-            logger.warn('WEBSITE: webpage not archivable: {}'.format(link))
+        del urlfetcher
         del page
 
 
