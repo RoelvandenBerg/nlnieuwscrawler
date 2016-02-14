@@ -72,3 +72,8 @@ def iri_to_uri(iri):
     return urllib.parse.urlunparse([
         url_encode_non_ascii(part.encode('utf-8')) for part in parts
     ])
+
+
+def filename(name):
+    return re.sub(
+        '''[\\\n\t\s;:\'\"!@#$%\*\(\)/=\+<>\?\|\{\}~`\^\[\]]''', '', name)
