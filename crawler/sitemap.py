@@ -254,7 +254,7 @@ class XmlSitemap(SitemapMixin, webpage.Webpage):
             self.filename[:-5]
         fi = str(self.filenameindex)
         self.filenameindex += 1
-        return validate.filename("{}_{}.data".format(filebase, fi))
+        return "{}_{}.data".format(validate.filename(filebase, False), fi)
 
 
 class XmlUrlset(XmlSitemap):

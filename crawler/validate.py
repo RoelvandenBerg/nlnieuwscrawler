@@ -74,6 +74,12 @@ def iri_to_uri(iri):
     ])
 
 
-def filename(name):
-    return re.sub(
-        '''[\\\n\t\s;:\'\"!@#$%\*\(\)=\+<>\?\|\{\}~`\^\[\]]''', '', name)
+def filename(name, check_ext=True):
+    f = re.sub('''[\\\n\t\s;:\'\"!@#$%\*\(\)=\+<>\?\|\{\}~`\^\[\]]''', '', name)
+    if len(f) > 80:
+        ext = f.split('.')[-1]
+        if len(ext) < 6 and check_ext:
+            f = f[:80] + ext
+        else:
+            f = f[:80]
+    return f
