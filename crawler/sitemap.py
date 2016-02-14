@@ -102,6 +102,7 @@ class SitemapMixin(object):
     head = False
     save_to_disk = True
     unique_tag = ""
+    as_html = False
 
     def __init__(self, url, html=None, base=None, filename=None, download=True):
         logger.debug('INIT SITEMAPMIXIN {} as {}.'.format(

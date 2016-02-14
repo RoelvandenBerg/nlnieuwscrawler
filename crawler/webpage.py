@@ -13,19 +13,19 @@ from sqlalchemy.orm.exc import NoResultFound
 import pybloom.pybloom
 
 try:
-    import base
+    import base as base_
     import model
     from settings import USER_AGENT_INFO, USER_AGENT
     import validate
 except ImportError:
-    import crawler.base as base
+    import crawler.base as base_
     import crawler.model as model
     from crawler.settings import USER_AGENT_INFO, USER_AGENT
     import crawler.validate as validate
 
 __author__ = 'roelvdberg@gmail.com'
 
-logger = base.logger_setup(__name__)
+logger = base_.logger_setup(__name__)
 
 
 def stringify(string):
@@ -48,7 +48,7 @@ def remove_file(filename):
         pass
 
 
-def file_iter(filename, tags):
+def file_iter(filename, tags, as_html=True):
     """
     fast_iter is useful if you need to free memory while iterating through a
     very large XML file.
@@ -61,21 +61,19 @@ def file_iter(filename, tags):
     :returns: current tag, and a dictionary with values for each given
         name. {name: value, ...}
     """
-    if not isinstance(tags, list):
+    if not hasattr(tags, '__iter__'):
         tags = [tags]
     with open(filename, 'rb') as fileobj:
-        context = etree.iterparse(fileobj, events=('end',), tag=tags)
-        try:
-            for event, elem in context:
-                yield elem
-                # It's safe to call clear() here because no descendants will be
-                # accessed
-                elem.clear()
-                # Also eliminate now-empty references from the root node to elem
-                while elem.getprevious() is not None:
-                    del elem.getparent()[0]
-        except etree.XMLSyntaxError:
-            pass
+        context = etree.iterparse(fileobj, events=('end',), tag=tags,
+                                  html=as_html)
+        for event, elem in context:
+            yield elem
+            # It's safe to call clear() here because no descendants will be
+            # accessed
+            elem.clear()
+            # Also eliminate now-empty references from the root node to elem
+            while elem.getprevious() is not None:
+                del elem.getparent()[0]
         del context
 
 
@@ -123,7 +121,7 @@ class Head(object):
         :param htmltree: lxml etree object of a webpage.
         """
         if from_disk and filename:
-            self.root = file_iter(filename, self.tags.keys())
+            self.root = file_iter(filename, self.tags.keys(), as_html=True)
         else:
             self.root = ()
         self.html = html
@@ -193,6 +191,7 @@ class WebpageRaw(object):
     robot_archive_options = ["noarchive", "nosnippet", "noindex"]
     head = True
     parser = etree.HTML
+    as_html = True
 
     def __init__(self, url, html=None, base=None, database_lock=None,
                  encoding='utf-8', save_file=False, filename=None,
@@ -220,7 +219,7 @@ class WebpageRaw(object):
         if base:
             self.base = base
         else:
-            self.base = base.parse_base(url)
+            self.base = base_.parse_base(url)
         self.html = html
         self.url = url
         self.encoding = encoding
@@ -250,14 +249,18 @@ class WebpageRaw(object):
             given on initialization.
         """
         if download and not self.html:
+            data, header = self.agent
             if url is None:
                 url = self.url
+
+            url = validate.iri_to_uri(url)
             if self.save_to_disk:
-                urllib.request.urlretrieve(url, self.filename)
+                with request.urlopen(request.Request(url, headers=header)) as\
+                        response, open(self.filename, 'wb') as f:
+                    f.write(response.read())
                 logger.debug('Saving {} to disk. Parsing from disk'.format(
                              self.filename))
                 return
-            data, header = self.agent
             url = validate.iri_to_uri(url)
             with request.urlopen(request.Request(url, headers=header)) \
                     as response:
@@ -277,7 +280,7 @@ class WebpageRaw(object):
     def file_iter(self):
         has_attr = self.has_attributes
         self.tag = [self.namespace + tag for tag in self.tag]
-        for elem in file_iter(self.filename, self.tag):
+        for elem in file_iter(self.filename, self.tag, self.as_html):
             if has_attr:
                 yield {
                     name: elem.attrib[attr] for attr, name in
@@ -730,8 +733,8 @@ class Links(Webpage):
 
     def file_iter(self):
         robot_nofollow = self.robot_archive_options + ['nofollow']
-        self.tag = [self.namespace + tag for tag in self.tag]
-        for elem in file_iter(self.filename, self.tag):
+        self.tag = {self.namespace + tag for tag in self.tag}
+        for elem in file_iter(self.filename, self.tag, as_html=self.as_html):
             link = elem.attrib.get('href')
             robots = elem.attrib.get('robots')
             if link and link not in self.visited and robots not in \

@@ -62,7 +62,7 @@ import urllib.parse
 
 
 def url_encode_non_ascii(b):
-    x = re.sub('[\x80-\xFF]', lambda c: '%%%02x' % ord(c.group(0)),
+    x = re.sub('''[\x80-\xFF‘"';:]''', lambda c: '%%%02x' % ord(c.group(0)),
                   b.decode('utf-8'))
     return x
 

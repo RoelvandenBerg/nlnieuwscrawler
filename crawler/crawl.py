@@ -112,9 +112,7 @@ class Website(object):
 
     def run(self):
         """Runs a website crawler."""
-        for _ in range(3):
-            if not self.has_content:
-                break
+        while self.has_content:
             start_time = time.time()
             try:
                 self._run_once()
@@ -220,22 +218,21 @@ class Crawler(object):
             # Run as much threads as MAX_THREADS (from settings) sets.
             while 0 < number_of_website_threads <= MAX_THREADS:
                 # start a new website thread:
-                try:
-                    base_url_queue_item = self.base_url.base_queue.get()
-                    thread = threading.Thread(
-                        target=self._website_worker,
-                        args=(base_url_queue_item,)
-                    )
-                    thread.start()
-                except Empty:
-                    pass #logger.debug("Queue of base urls is empty.")
+                self.run_once()
                 number_of_website_threads = threading.activeCount() - 1
-                # logger.debug(
-                #     "CRAWLER: Number of threads with websites running: {}"
-                #     .format(number_of_website_threads)
-                # )
         logger.debug("CRAWLER: Finished")
         logger.debug("CRAWLER:\n" + repr(self.base_url))
+
+    def run_once(self):
+        try:
+            base_url_queue_item = self.base_url.base_queue.get()
+            thread = threading.Thread(
+                target=self._website_worker,
+                args=(base_url_queue_item,)
+            )
+            thread.start()
+        except Empty:
+            pass #logger.debug("Queue of base urls is empty.")
 
     def _website_worker(self, base_url_queue_item):
         """
