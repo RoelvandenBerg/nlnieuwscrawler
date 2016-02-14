@@ -70,8 +70,11 @@ class BaseUrl(list):
         :param base: either a string with a base url or a list of strings with
             base urls.
         """
-        self.history = pybloom.pybloom.BloomFilter(capacity=bloomfilter_max,
-                                           error_rate=0.0001)
+        self.history = pybloom.pybloom.ScalableBloomFilter(
+            capacity=bloomfilter_max,
+            error_rate=0.0001,
+            mode=pybloom.pybloom.ScalableBloomFilter.SMALL_SET_GROWTH
+        )
         # self.history = pybloof.StringBloomFilter(
         #     size=bloomfilter_size,
         #     hashes=bloomfilter_hashes
@@ -174,9 +177,9 @@ class BaseUrl(list):
     def add_to_history(self, url):
         self.history.add(url)
         self.total_stored += 1
-        if self.total_stored > self.max:
-            raise MemoryError('Too many urls stored in '
-                              'bloomfilter')
+        if self.total_stored == self.max + 1:
+            logger.debug('Too many urls stored in bloomfilter. now '
+                         'stores more than {} urls.'.format(self.max))
 
     def append(self, url, depth):
         """
