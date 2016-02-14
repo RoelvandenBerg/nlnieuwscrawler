@@ -71,7 +71,7 @@ class BaseUrl(list):
             base urls.
         """
         self.history = pybloom.pybloom.ScalableBloomFilter(
-            capacity=bloomfilter_max,
+            initial_capacity=bloomfilter_max,
             error_rate=0.0001,
             mode=pybloom.pybloom.ScalableBloomFilter.SMALL_SET_GROWTH
         )
