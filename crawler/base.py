@@ -1,5 +1,6 @@
 from datetime import datetime as dt
 import logging
+import os
 import re
 import threading
 import urllib.error
@@ -199,6 +200,30 @@ class BaseUrl(list):
                     queue_name = base.split('//')[1]
                 else:
                     queue_name = base
+                directory = '../data'
+                dir_exists = os.path.exists(os.path.join(directory, queue_name))
+                if dir_exists:
+                    temp_link_queue = FileQueue(
+                        directory="../data",
+                        name='temp' + queue_name,
+                        persistent=False,
+                        overwrite=True,
+                        pickled=False
+                    )
+                    link_queue = FileQueue(
+                        directory="../data",
+                        name=queue_name,
+                        persistent=False,
+                        overwrite=True,
+                        pickled=False
+                    )
+                    while True:
+                        try:
+                            existing_link = link_queue.get()
+                        except StopIteration:
+                            break
+                        self.history.put(existing_link)
+                        temp_link_queue.put(existing_link)
                 link_queue = FileQueue(
                     directory="../data",
                     name=queue_name,
@@ -206,6 +231,12 @@ class BaseUrl(list):
                     overwrite=True,
                     pickled=False
                 )
+                if dir_exists:
+                    while True:
+                        try:
+                            link_queue.put(temp_link_queue.get())
+                        except StopIteration:
+                            break
                 self.add_to_history(url)
                 link_queue.put(url)
                 # base urls are added to the crawl queue only if set in

@@ -142,6 +142,7 @@ class Website(object):
             return
         filename = validate.filename('../data/thread_{}_{}.data'.format(
             self.base.split('.')[-2].split('/')[-1], link.split('/')[-1]))
+
         while True:
             try:
                 page = self.webpage(
