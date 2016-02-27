@@ -3,6 +3,7 @@ import os
 
 from sqlalchemy import Column
 from sqlalchemy import create_engine
+from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 from sqlalchemy import Integer
 from sqlalchemy import String
@@ -27,6 +28,7 @@ class Website(Base):
     __tablename__ = 'websites'
     id = Column(Integer, primary_key=True)
     webpages = relationship("Webpage", backref='websites')
+    sitemaps = relationship("SitemapHistory", backref='sitemaps')
     created = Column(DateTime)
     modified = Column(DateTime)
     crawl_depth = Column(Integer)
@@ -57,6 +59,22 @@ class Webpage(Base):
     def __repr__(self):
        return "<Title(title={}, date crawled={})>".format(
                             self.title, str(self.crawl_modified))
+
+
+class SitemapHistory(Base):
+    __tablename__ = 'sitemaps'
+    id = Column(Integer, primary_key=True)
+    website_id = Column(Integer, ForeignKey('websites.id'))
+    url = Column(String, nullable=False)
+    modified = Column(DateTime, default=None)
+
+
+class History(Base):
+    __tablename__ = 'visited_pages'
+    id = Column(Integer, primary_key=True)
+    webpage_id = Column(Integer, ForeignKey('webpages.id'))
+    page = Column(String, nullable=False)
+    modified = Column(DateTime, default=None)
 
 
 class Paragraph(Base):

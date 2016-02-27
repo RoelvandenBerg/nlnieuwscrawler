@@ -85,7 +85,8 @@ class Website(object):
                                          database_lock=self.database_lock)
         self.robot_txt = robot.Txt(
             url=urllib.parse.urljoin(base, 'robots.txt'),
-            base_url=self.base_url
+            base_url=self.base_url,
+            database_lock=database_lock
         )
         try:
             self.robot_txt.read()

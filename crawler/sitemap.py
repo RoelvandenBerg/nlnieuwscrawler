@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 __author__ = 'roelvdberg@gmail.com'
 
+import datetime
 from gzip import GzipFile
 import os
 import urllib.error
@@ -9,20 +10,23 @@ import lxml.etree as etree
 
 try:
     from base import logger_setup
+    import model
     import webpage
     import validate
+    from settings import CRAWL_DELAY
 except ImportError:
     from crawler.base import logger_setup
+    import crawler.model as model
     import crawler.webpage as webpage
     import crawler.validate as validate
-
+    from crawler.settings import CRAWL_DELAY
 
 logger = logger_setup(__name__)
 
 
 class Sitemap(object):
 
-    def __init__(self, urls, base, html=None, first=True):
+    def __init__(self, urls, base, html=None, first=True, database_lock=None):
         self.urls = []
         if isinstance(urls, str):
             urls = [urls]
@@ -40,6 +44,7 @@ class Sitemap(object):
         self.html = html
         self.iterator = iter(self._iterator())
         self.iterable = True
+        self.database_lock = database_lock
         logger.debug('SITEMAP INITIALIZED: ' + self.base)
 
     def __iter__(self):
@@ -87,7 +92,8 @@ class Sitemap(object):
             klass = XmlSitemapIndex
         try:
             logger.debug("SITEMAP: loading {}".format(url))
-            return klass(url=url, html=self.html, base=self.base)
+            return klass(url=url, html=self.html, base=self.base,
+                         database_lock=self.database_lock)
         except (AttributeError, TypeError, ValueError, urllib.error.URLError,
                 urllib.error.HTTPError):
             logger.debug("SITEMAP: LOADING FAILED {}".format(url))
@@ -104,7 +110,8 @@ class SitemapMixin(object):
     unique_tag = ""
     as_html = False
 
-    def __init__(self, url, html=None, base=None, filename=None, download=True):
+    def __init__(self, url, html=None, base=None, filename=None,
+                 download=True, database_lock=None):
         logger.debug('INIT SITEMAPMIXIN {} as {}.'.format(
             url, self.__class__.__name__))
         self.links = []
@@ -122,7 +129,6 @@ class SitemapMixin(object):
             download=download
         )
         self.unique_tag = self.namespace + self.unique_tag
-
 
     def _attr_len(self, sitemap):
         attributes = ["links", "modified_time", "revisit", 'publication_date',
@@ -143,17 +149,6 @@ class SitemapMixin(object):
             for change in changes:
                 setattr(p_object, change, [''] * length)
 
-    def __add__(self, other):
-        self.links += other.links
-        self_attr, max_self, change_self = self._attr_len(self)
-        other_attr, max_other, change_other = self._attr_len(other)
-        self._update(self, max_other, self_attr, other_attr, change_self)
-        self._update(other, max_self, other_attr, self_attr, change_other)
-        return self
-
-    def __iadd__(self, other):
-        return self.__add__(other)
-
     @property
     def fits_xml(self):
         with open(self.filename, 'rb') as fileobj:
@@ -166,22 +161,6 @@ class SitemapMixin(object):
                 return False
 
 
-# class Rss(SitemapMixin, webpage.Webpage):
-#     unique_tag = 'item'
-#     tag = ["link", "lastBuildDate", "pubDate", "title", "description"]
-#     name = ["links", "modified_time", 'publication_date', 'title',
-#             'description']
-#     parser = etree.XML
-#     xml = True
-#
-#     def __init__(self, url, html=None, base=None):
-#         super().__init__(url, html=html, base=base)
-#         self.modified_time = [
-#             mod_time if mod_time != '' else self.publication_date[i]
-#             for i, mod_time in enumerate(self.modified_time)
-#         ]
-
-
 class XmlSitemap(SitemapMixin, webpage.Webpage):
     """
     Parses XML sitemapindexes.
@@ -192,25 +171,48 @@ class XmlSitemap(SitemapMixin, webpage.Webpage):
     xml = True
     next = None
 
-    def __init__(self, url, html=None, base=None, filename=None, download=True):
+    def __init__(self, url, html=None, base=None, filename=None,
+                 download=True, database_lock=None):
         logger.debug('SITEMAP: loading XML ' + base)
         super().__init__(
             url=url,
             html=html,
             base=base,
             filename=filename,
-            download=download
+            download=download,
+            database_lock=database_lock
         )
         self.filenameindex = 0
-        if self.fits_xml:
+        if not self.sitemap_crawlable:
+            self._iterate_sitemaps = iter(())
+        elif self.fits_xml:
             self._iterate_sitemaps = iter(self._fitting_sitemap_iterator())
         else:
             self._iterate_sitemaps = iter(self._next_sitemap_iterator(
                 download=False, filename=self.filename))
 
     def __next__(self):
-        x = next(self._iterate_sitemaps)
-        return x
+        try:
+            x = next(self._iterate_sitemaps)
+            return x
+        except StopIteration:
+            if self.sitemap_crawlable:
+                self.store_sitemap()
+            raise
+
+    @property
+    def sitemap_crawlable(self):
+        """
+        Website entry in database that belongs to this webpage.
+        """
+        with self.database_lock:
+            recorded_sitemaps = self.session.query(
+                model.SitemapHistory).filter_by(
+                url=self.url).all()
+            if not recorded_sitemaps:
+                return True
+            return min((x.modified - datetime.datetime.now()).days for x in
+                recorded_sitemaps) > CRAWL_DELAY
 
     def _next_sitemap_iterator(self, download, filename=None):
         fn = filename if filename else self.update_filename()
@@ -255,6 +257,17 @@ class XmlSitemap(SitemapMixin, webpage.Webpage):
         fi = str(self.filenameindex)
         self.filenameindex += 1
         return "{}_{}.data".format(validate.filename(filebase, False), fi)
+
+    def store_sitemap(self):
+        with self.database_lock:
+            website = self.website_entry
+            new_item = model.SitemapHistory(
+                url=self.url,
+                modified=datetime.datetime.now()
+            )
+            website.sitemaps.append(new_item)
+            self.store_model(item=website)
+            logger.debug('Stored sitemap url: ' + self.url)
 
 
 class XmlUrlset(XmlSitemap):

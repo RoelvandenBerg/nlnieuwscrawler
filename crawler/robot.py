@@ -27,10 +27,11 @@ class Txt(robotparser.RobotFileParser):
     - logging
     """
 
-    def __init__(self, url, base_url):
+    def __init__(self, url, base_url, database_lock):
         self.base_url = base_url
         self.sitemap = ()
         self.crawl_delay = CRAWL_DELAY
+        self.database_lock = database_lock
         super().__init__(url)
 
     def parse(self, lines):
@@ -92,6 +93,7 @@ class Txt(robotparser.RobotFileParser):
                             self.sitemap = sitemap.Sitemap(
                                 urls=sitemap_url,
                                 base=self.url.strip('/robots.txt'),
+                                database_lock=self.database_lock
                             )
                 elif line[0].lower().startswith('crawl-delay'):
                     new_delay = float(line[1])
