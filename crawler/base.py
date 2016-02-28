@@ -362,11 +362,11 @@ class WebpageDatabaseQueue(object):
 
     def __contains__(self, item):
         with self.database_lock:
-            self.session.query(model.CrawledLinks).filter_by(
-                website=self.website_entry,
+            query_result = self.session.query(model.CrawledLinks).filter_by(
+                website_id=self.website_entry.id,
                 url=item
             )
-        return True
+        return any(True for _ in query_result)
 
     @property
     def website_entry(self):
