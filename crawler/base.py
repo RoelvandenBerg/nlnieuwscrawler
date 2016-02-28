@@ -1,4 +1,4 @@
-from datetime import datetime as dt
+import datetime
 import logging
 import os
 import re
@@ -112,7 +112,7 @@ class BaseUrl(list):
             if not site.url in self.history:
                 self.append(site.url, site.crawl_depth)
         pages = self.session.query(model.Webpage).all()
-        now = dt.now()
+        now = datetime.datetime.now()
         for page in pages:
             if (now - page.crawl_modified).days < REVISIT_AFTER:
                 site = self.session.query(model.Website).filter_by(
@@ -129,8 +129,8 @@ class BaseUrl(list):
         with self.database_lock:
             new_item = model.Website(
                 url=url,
-                created=dt.now(),
-                modified=dt.now(),
+                created=datetime.datetime.now(),
+                modified=datetime.datetime.now(),
                 crawl_depth=depth,
             )
             self.session.add(new_item)
@@ -309,3 +309,70 @@ class BaseUrl(list):
         except IndexError:
             return False
 
+
+class Empty(Exception):
+    pass
+
+
+class WebpageDatabaseQueue(object):
+
+    def __init__(self, base, database_lock):
+        self.session = model.Session()
+        self.database_lock = database_lock
+        self.base = base
+
+    def get(self):
+        with self.database_lock:
+            website_entry = self.website_entry
+            uncrawled = self.session.query(model.CrawledLinks).filter_by(
+                website_id=website_entry.id,
+                crawled_at=None
+            )
+            try:
+                next_url = uncrawled[0]
+            except IndexError:
+                uncrawled = self.session.query(model.CrawledLinks).filter_by(
+                    website_id=website_entry.id,
+                ).filter(
+                    model.CrawledLinks.crawled_at < (
+                        datetime.datetime.now() - datetime.timedelta(
+                            days=CRAWL_DELAY))
+                ).all()
+                uncrawled.sort(key=lambda x: x.crawled_at)
+                try:
+                    next_url = uncrawled[0]
+                except IndexError:
+                    raise Empty
+            next_url.crawled_at = datetime.datetime.now()
+            next_url.modified = datetime.datetime.now()
+            self.session.add(next_url)
+            self.session.commit()
+            return next_url.url
+
+    def put(self, url):
+        with self.database_lock:
+            website = self.website_entry
+            new_entry = model.CrawledLinks(
+                url=url,
+                modified=datetime.datetime.now()
+            )
+            website.crawled_links.append(new_entry)
+            self.session.add(website)
+            self.session.commit()
+
+    def __contains__(self, item):
+        with self.database_lock:
+            self.session.query(model.CrawledLinks).filter_by(
+                website=self.website_entry,
+                url=item
+            )
+        return True
+
+    @property
+    def website_entry(self):
+        """
+        Website entry in database that belongs to this Queue.
+        """
+        with self.database_lock:
+            return self.session.query(model.Website).filter_by(
+                url=self.base).one()

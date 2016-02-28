@@ -29,6 +29,7 @@ class Website(Base):
     id = Column(Integer, primary_key=True)
     webpages = relationship("Webpage", backref='websites')
     sitemaps = relationship("SitemapHistory", backref='sitemaps')
+    crawled_links = relationship("CrawledLinks", backref='crawled_links')
     created = Column(DateTime)
     modified = Column(DateTime)
     crawl_depth = Column(Integer)
@@ -69,12 +70,13 @@ class SitemapHistory(Base):
     modified = Column(DateTime, default=None)
 
 
-class History(Base):
-    __tablename__ = 'visited_pages'
+class CrawledLinks(Base):
+    __tablename__ = 'crawled_links'
     id = Column(Integer, primary_key=True)
-    webpage_id = Column(Integer, ForeignKey('webpages.id'))
-    page = Column(String, nullable=False)
-    modified = Column(DateTime, default=None)
+    website_id = Column(Integer, ForeignKey('websites.id'))
+    url = Column(String, nullable=False)
+    modified = Column(DateTime, nullable=False)
+    crawled_at = Column(DateTime, default=None)
 
 
 class Paragraph(Base):
