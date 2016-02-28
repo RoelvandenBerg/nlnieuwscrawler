@@ -3,7 +3,6 @@ import os
 
 from sqlalchemy import Column
 from sqlalchemy import create_engine
-from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 from sqlalchemy import Integer
 from sqlalchemy import String
@@ -17,7 +16,8 @@ try:
 except ImportError:
     from crawler.settings import *
 
-engine = create_engine('sqlite:///' + DATABASE_FILENAME, echo=VERBOSE)
+engine = create_engine('sqlite:///' + DATABASE_FILENAME, echo=VERBOSE,
+                       connect_args={'check_same_thread': False})
 
 Base = declarative_base()
 

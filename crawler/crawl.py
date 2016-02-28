@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 __author__ = 'roelvdberg@gmail.com'
 
-from datetime import datetime as dt
+import datetime
 import logging
 import threading
 import time
@@ -29,7 +29,8 @@ except ImportError:
 
 logging.basicConfig(filename=LOG_FILENAME, level=logging.DEBUG)
 logger = base_.logger_setup(__name__)
-logger.debug("NEW_CRAWL_RUN | " + dt.now().strftime('%H:%M | %d-%m-%Y |'))
+logger.debug("NEW_CRAWL_RUN | " + datetime.datetime.now().strftime(
+    '%H:%M | %d-%m-%Y |'))
 
 
 ENCODINGS = ['utf_8', 'latin_1', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32',
