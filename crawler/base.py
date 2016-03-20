@@ -277,8 +277,8 @@ class BaseUrl(list):
             [
                 "\nDEPTH {}:\n".format(str(i)) +
                 "\n".join(
-                    ["    - qsize: {} for {}\n".format(link_queue.qsize(), base)
-                     for base, link_queue in layer.items()]
+                    ["    - {}\n".format(base)
+                     for base, _ in layer.items()]
                 ) for i, layer in enumerate(self)
             ]
         )

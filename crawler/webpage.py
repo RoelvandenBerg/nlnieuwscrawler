@@ -2,6 +2,7 @@
 
 from datetime import datetime as dt
 import dateutil.parser as dtparser
+import http.cookiejar
 import os
 import threading
 import urllib.parse
@@ -255,7 +256,10 @@ class WebpageRaw(object):
 
             url = validate.iri_to_uri(url)
             if self.save_to_disk:
-                with request.urlopen(request.Request(url, headers=header)) as\
+                cj = http.cookiejar.CookieJar()
+                opener = urllib.request.build_opener(
+                    request.HTTPCookieProcessor(cj))
+                with opener.open(request.Request(url, headers=header)) as\
                         response, open(self.filename, 'wb') as f:
                     f.write(response.read())
                 logger.debug('Saving {} to disk. Parsing from disk'.format(
@@ -283,7 +287,7 @@ class WebpageRaw(object):
         for elem in file_iter(self.filename, self.tag, self.as_html):
             if has_attr:
                 yield {
-                    name: elem.attrib[attr] for attr, name in
+                    name: elem.get(attr) for attr, name in
                     self.attr_name[elem.tag]
                 }
             else:
