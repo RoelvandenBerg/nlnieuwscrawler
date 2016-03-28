@@ -226,8 +226,6 @@ class WebpageRaw(object):
         self.encoding = encoding
         self.session = model.Session()
         self.save_to_disk = save_file
-        self._finalizer = weakref.finalize(
-            self, remove_file, self.filename if not persistent else "")
         self._iterator = iter(self.file_iter()) if save_file else iter(
             self.memory_iter())
         self.fetch(*args, **kwargs)
@@ -332,10 +330,6 @@ class WebpageRaw(object):
 
     def __next__(self):
         return next(self._iterator)
-
-    def remove(self):
-        """Removes associated file."""
-        self._finalizer()
 
     def store(self):
         """
@@ -505,9 +499,6 @@ class Webpage(WebpageRaw):
         the head-section of a website.
     :param parser: HTML or XML lxml parser (etree.XML or etree.HTML).
     """
-    tag = ""
-    name = []
-    attr = []
     split_content = True
     one_tag = False
     selector_string = None
@@ -532,7 +523,9 @@ class Webpage(WebpageRaw):
             self.tag = [self.tag]
         if not isinstance(self.name, list):
             self.name = [self.name]
-        if not isinstance(self.attr, list):
+        if getattr(self, 'attr', None) is None:
+            self.attr = []
+        elif not isinstance(self.attr, list):
             self.attr = [self.attr]
             self.one_tag = True
         super().__init__(
@@ -637,6 +630,23 @@ class Webpage(WebpageRaw):
         """
         children = [self._textwalk(x) + stringify(x.tail) for x in element]
         return stringify(element.text) + "".join(children)
+
+
+class Removable(object):
+
+    def __init__(self, klass=WebpageRaw, persistent=None, *args, **kwargs):
+        if persistent:
+            self.page = klass(*args, persistent=persistent, **kwargs)
+        else:
+            self.page = klass(*args, **kwargs)
+        self._finalizer = weakref.finalize(
+            self, remove_file, self.page.filename if not persistent else ""
+        )
+
+    def remove(self):
+        """Removes associated file."""
+        self._finalizer()
+
 
 
 class Text(Webpage):
@@ -746,7 +756,6 @@ class Links(Webpage):
                 yield {'links': link}
             self.visited.add(link)
         del self.visited
-
 
     def memory_iter(self):
         robot_nofollow = self.robot_archive_options + ['nofollow']

@@ -24,6 +24,10 @@ except ImportError:
 logger = logger_setup(__name__)
 
 
+class Empty(object):
+    page = ()
+
+
 class Sitemap(object):
 
     def __init__(self, urls, base, html=None, first=True, database_lock=None):
@@ -57,12 +61,10 @@ class Sitemap(object):
         while len(self.urls):
             url = self.urls.pop()
             sitemap = self.choose(url)
-            for content in sitemap:
+            for content in sitemap.page:
                 yield content
             del sitemap
         self.iterable = False
-        raise StopIteration
-        yield
 
     def append(self, url):
         self.urls.append(url)
@@ -92,12 +94,14 @@ class Sitemap(object):
             klass = XmlSitemapIndex
         try:
             logger.debug("SITEMAP: loading {}".format(url))
-            return klass(url=url, html=self.html, base=self.base,
-                         database_lock=self.database_lock)
+            return webpage.Removable(
+                url=url, html=self.html, base=self.base,
+                database_lock=self.database_lock, klass=klass
+            )
         except (AttributeError, TypeError, ValueError, urllib.error.URLError,
                 urllib.error.HTTPError):
             logger.debug("SITEMAP: LOADING FAILED {}".format(url))
-            return ()
+        return Empty()
 
 
 class SitemapMixin(object):
@@ -172,7 +176,7 @@ class XmlSitemap(SitemapMixin, webpage.Webpage):
     next = None
 
     def __init__(self, url, html=None, base=None, filename=None,
-                 download=True, database_lock=None):
+                 download=True, database_lock=None, *args, **kwargs):
         logger.debug('SITEMAP: loading XML ' + base)
         super().__init__(
             url=url,
@@ -345,8 +349,8 @@ class GunZip(XmlSitemap):
         with open(new_filename, 'w') as new_file:
             new_file.write(zipped.read().decode('utf-8'))
         os.remove(self.filename)
-        for link in iter(self._next_sitemap_iterator(download=False,
-                                                     filename=new_filename)):
+        for link in iter(self._next_sitemap_iterator(
+                download=False, filename=new_filename)):
             yield link
 
 

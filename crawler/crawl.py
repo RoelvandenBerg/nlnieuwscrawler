@@ -149,35 +149,37 @@ class Website(object):
 
         while True:
             try:
-                page = self.webpage(
+                p = webpage.Removable(
                     url=link,
                     base=self.base,
                     database_lock=self.database_lock,
                     encoding=self.encoding[-1],
                     save_file=True,
                     filename=filename,
-                    persistent=True
+                    persistent=True,
+                    klass=self.webpage
                 )
-                if page.followable:
-                    urlfetcher = webpage.Links(
+                if p.page.followable:
+                    urlfetcher = webpage.Removable(
                         url=link,
                         base=self.base,
-                        html=page.html,
+                        html=p.page.html,
                         download=False,
                         save_file=True,
-                        filename=page.filename,
-                        persistent=True
+                        filename=p.page.filename,
+                        persistent=True,
+                        klass=webpage.Links
                     )
                     self.base_url.add_links(
-                        link_container=urlfetcher,
+                        link_container=urlfetcher.page,
                         depth=self.depth,
                         base=self.base
                     )
                 else:
                     logger.debug('WEBSITE: webpage not followable: {}'.format(link))
-                if page.archivable:
+                if p.page.archivable:
                     try:
-                        page.store()
+                        p.page.store()
                     except (TypeError, AttributeError):
                         logger.debug(
                             'WEBSITE: store content not working for page: {}'
@@ -194,10 +196,10 @@ class Website(object):
                 continue
             break
         remove_file(filename)
-        if page.encoding != self.encoding[-1]:
-            self.encoding.append(page.encoding)
+        if p.page.encoding != self.encoding[-1]:
+            self.encoding.append(p.page.encoding)
         del urlfetcher
-        del page
+        del p
 
 
 class Crawler(object):
