@@ -2,6 +2,7 @@
 __author__ = 'roelvdberg@gmail.com'
 
 import datetime
+import gc
 import logging
 import threading
 import time
@@ -198,6 +199,7 @@ class Website(object):
             self.encoding.append(p.page.encoding)
         del urlfetcher
         del p
+        gc.collect()
 
 
 class Crawler(object):
