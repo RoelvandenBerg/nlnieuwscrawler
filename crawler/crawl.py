@@ -10,8 +10,7 @@ import urllib.parse
 
 try:
     import base as base_
-    from base import Empty
-    import filequeue
+    from filequeue import Empty
     import model
     import robot
     from settings import *
@@ -20,8 +19,7 @@ try:
     from webpage import remove_file
 except ImportError:
     import crawler.base as base_
-    from crawler.base import Empty
-    import crawler.filequeue as filequeue
+    from crawler.filequeue import Empty
     import crawler.model as model
     import crawler.robot as robot
     from crawler.settings import *
@@ -238,7 +236,7 @@ class Crawler(object):
                 args=(base_url_queue_item,)
             )
             thread.start()
-        except filequeue.Empty:
+        except Empty:
             pass #logger.debug("Queue of base urls is empty.")
 
     def _website_worker(self, base_url_queue_item):

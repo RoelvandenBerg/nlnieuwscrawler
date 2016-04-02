@@ -1,9 +1,13 @@
 import datetime
 import logging
+import os
 import re
 import threading
 import urllib.error
 import urllib.parse
+
+# import pybloof
+import pybloom.pybloom
 
 __author__ = 'roelvdberg@gmail.com'
 
@@ -37,73 +41,6 @@ def parse_base(url):
     return base_regex.findall(url)[0]
 
 
-class Empty(Exception):
-    pass
-
-
-class WebpageDatabaseQueue(object):
-
-    def __init__(self, base, database_lock):
-        self.session = model.Session()
-        self.database_lock = database_lock
-        self.base = base
-
-    def get(self):
-        with self.database_lock:
-            website_entry = self.website_entry
-            uncrawled = self.session.query(model.CrawledLinks).filter_by(
-                website_id=website_entry.id,
-                crawled_at=None
-            )
-            try:
-                next_url = uncrawled[0]
-            except IndexError:
-                uncrawled = self.session.query(model.CrawledLinks).filter_by(
-                    website_id=website_entry.id,
-                ).filter(
-                    model.CrawledLinks.crawled_at < (
-                        datetime.datetime.now() - datetime.timedelta(
-                            days=CRAWL_DELAY))
-                ).all()
-                uncrawled.sort(key=lambda x: x.crawled_at)
-                try:
-                    next_url = uncrawled[0]
-                except IndexError:
-                    raise Empty
-            next_url.crawled_at = datetime.datetime.now()
-            next_url.modified = datetime.datetime.now()
-            self.session.add(next_url)
-            self.session.commit()
-            return next_url.url
-
-    def put(self, url):
-        with self.database_lock:
-            website = self.website_entry
-            new_entry = model.CrawledLinks(
-                url=url,
-                modified=datetime.datetime.now()
-            )
-            website.crawled_links.append(new_entry)
-            self.session.add(website)
-            self.session.commit()
-
-    def __contains__(self, item):
-        with self.database_lock:
-            query_result = self.session.query(model.CrawledLinks).filter_by(
-                url=item
-            ).all()
-        return bool(query_result)
-
-    @property
-    def website_entry(self):
-        """
-        Website entry in database that belongs to this Queue.
-        """
-        with self.database_lock:
-            return self.session.query(model.Website).filter_by(
-                url=self.base).one()
-
-
 class BaseUrl(list):
     """
     A list of baseurls that can be crawled.
@@ -127,14 +64,24 @@ class BaseUrl(list):
     [0]: the base url string
     [1]: link_queue: a queue of all links that still need to be crawled.
     """
-    __contains__ = WebpageDatabaseQueue.__contains__
 
-    def __init__(self, base, database_lock):
+    def __init__(self, base, database_lock, bloomfilter_size=33547705,
+                 bloomfilter_hashes=23, bloomfilter_max=1000000):
         """
         :param base: either a string with a base url or a list of strings with
             base urls.
         """
+        self.history = pybloom.pybloom.ScalableBloomFilter(
+            initial_capacity=bloomfilter_max,
+            error_rate=0.0001,
+            mode=pybloom.pybloom.ScalableBloomFilter.SMALL_SET_GROWTH
+        )
+        # self.history = pybloof.StringBloomFilter(
+        #     size=bloomfilter_size,
+        #     hashes=bloomfilter_hashes
+        # )
         self.total_stored = 0
+        self.max = bloomfilter_max
         self.database_lock = database_lock
         self.sitemap_semaphore = threading.Semaphore(MAX_CONCURRENT_SITEMAPS)
         super().__init__()
@@ -149,31 +96,45 @@ class BaseUrl(list):
         )
         if isinstance(base, str):
             base = [base]
+        self.load_from_db = True
+        sites = self.load_from_database()
+        self.load_from_db = False
         for base_url in base:
-            self.append(base_url, 0)
+            if base_url not in sites and base_url + '/' not in sites and \
+                    base_url not in self.history:
+                self.append(base_url, 0)
+
+    def load_from_database(self):
+        sites = self.session.query(model.Website).all()
+        sitelist = []
+        for site in sites:
+            sitelist.append(site.url)
+            if not site.url in self.history:
+                self.append(site.url, site.crawl_depth)
+        pages = self.session.query(model.Webpage).all()
+        now = datetime.datetime.now()
+        for page in pages:
+            if (now - page.crawl_modified).days < REVISIT_AFTER:
+                site = self.session.query(model.Website).filter_by(
+                    id=page.website_id).one()
+                self.add(page.url, site.crawl_depth, True)
+                logger.debug('Not crawling: {}'.format(page.url))
+        return sitelist
 
     def store(self, url, depth):
         """
         Stores url to website table in database.
         :param url: website base url
         """
-        if not self.website_entry_exists(url):
-            with self.database_lock:
-                new_item = model.Website(
-                    url=url,
-                    created=datetime.datetime.now(),
-                    modified=datetime.datetime.now(),
-                    crawl_depth=depth,
-                )
-                self.session.add(new_item)
-                self.session.commit()
-
-    def website_entry_exists(self, base):
         with self.database_lock:
-            query_result = self.session.query(model.Website).filter_by(
-                url=base
-            ).all()
-            return bool(query_result)
+            new_item = model.Website(
+                url=url,
+                created=datetime.datetime.now(),
+                modified=datetime.datetime.now(),
+                crawl_depth=depth,
+            )
+            self.session.add(new_item)
+            self.session.commit()
 
     def url_belongs_to_base(self, url, base):
         """
@@ -203,8 +164,9 @@ class BaseUrl(list):
                 for base, link_queue in base_bundle.items():
                     # test if url contains base and hasn't been added before
                     if self.url_belongs_to_base(url, base):
-                        if url not in self:
+                        if url not in self.history:
                             # link hasn't been added before, so store it
+                            self.add_to_history(url)
                             if crawl_url:
                                 link_queue.put(url)
                         return
@@ -212,6 +174,13 @@ class BaseUrl(list):
             # as a base url.
             current_depth += 1
             self.append(url, current_depth)
+
+    def add_to_history(self, url):
+        self.history.add(url)
+        self.total_stored += 1
+        if self.total_stored == self.max + 1:
+            logger.debug('Too many urls stored in bloomfilter. now '
+                         'stores more than {} urls.'.format(self.max))
 
     def append(self, url, depth):
         """
@@ -227,18 +196,58 @@ class BaseUrl(list):
             if base not in self[depth] or validate.url_explicit(url):
                 logger.debug('BASE_URL: adding new base @depth {} : {}'
                              .format(depth, base))
-                self.store(base, depth)
-                link_queue = WebpageDatabaseQueue(
-                    base=base,
-                    database_lock=self.database_lock
+                if '//' in base:
+                    queue_name = base.split('//')[1]
+                else:
+                    queue_name = base
+                directory = '../data'
+                dir_exists = os.path.exists(os.path.join(directory, queue_name))
+                if dir_exists:
+                    temp_link_queue = FileQueue(
+                        directory="../data",
+                        name='temp' + queue_name,
+                        persistent=False,
+                        overwrite=True,
+                        pickled=False
+                    )
+                    link_queue = FileQueue(
+                        directory="../data",
+                        name=queue_name,
+                        persistent=False,
+                        overwrite=True,
+                        pickled=False
+                    )
+                    while True:
+                        try:
+                            existing_link = link_queue.get()
+                        except StopIteration:
+                            break
+                        self.history.put(existing_link)
+                        temp_link_queue.put(existing_link)
+                link_queue = FileQueue(
+                    directory="../data",
+                    name=queue_name,
+                    persistent=True,
+                    overwrite=True,
+                    pickled=False
                 )
+                if dir_exists:
+                    while True:
+                        try:
+                            link_queue.put(temp_link_queue.get())
+                        except StopIteration:
+                            break
+                self.add_to_history(url)
                 link_queue.put(url)
                 # base urls are added to the crawl queue only if set in
                 # settings:
                 if ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE:
+                    self.add_to_history(base)
                     link_queue.put(base)
                 self[depth][base] = link_queue
                 self.base_queue.put((base, depth))
+                if not self.load_from_db:
+                    self.store(base, depth)
             else:
                 logger.debug("BASE_URL: cannot add {}".format(base))
 
@@ -277,8 +286,8 @@ class BaseUrl(list):
             [
                 "\nDEPTH {}:\n".format(str(i)) +
                 "\n".join(
-                    ["    - {}\n".format(base)
-                     for base, _ in layer.items()]
+                    ["    - qsize: {} for {}\n".format(link_queue.qsize(), base)
+                     for base, link_queue in layer.items()]
                 ) for i, layer in enumerate(self)
             ]
         )

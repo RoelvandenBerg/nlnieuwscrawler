@@ -16,8 +16,7 @@ try:
 except ImportError:
     from crawler.settings import *
 
-engine = create_engine('sqlite:///' + DATABASE_FILENAME, echo=VERBOSE,
-                       connect_args={'check_same_thread': False})
+engine = create_engine('sqlite:///' + DATABASE_FILENAME, echo=VERBOSE)
 
 Base = declarative_base()
 
@@ -29,7 +28,6 @@ class Website(Base):
     id = Column(Integer, primary_key=True)
     webpages = relationship("Webpage", backref='websites')
     sitemaps = relationship("SitemapHistory", backref='sitemaps')
-    crawled_links = relationship("CrawledLinks", backref='crawled_links')
     created = Column(DateTime)
     modified = Column(DateTime)
     crawl_depth = Column(Integer)
@@ -68,15 +66,6 @@ class SitemapHistory(Base):
     website_id = Column(Integer, ForeignKey('websites.id'))
     url = Column(String, nullable=False)
     modified = Column(DateTime, default=None)
-
-
-class CrawledLinks(Base):
-    __tablename__ = 'crawled_links'
-    id = Column(Integer, primary_key=True)
-    website_id = Column(Integer, ForeignKey('websites.id'))
-    url = Column(String, nullable=False)
-    modified = Column(DateTime, nullable=False)
-    crawled_at = Column(DateTime, default=None)
 
 
 class Paragraph(Base):
