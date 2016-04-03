@@ -13,11 +13,13 @@ __author__ = 'roelvdberg@gmail.com'
 
 try:
     from filequeue import FileQueue
+    from filequeue import Empty
     import model
     from settings import *
     import validate
 except ImportError:
     from crawler.filequeue import FileQueue
+    from crawler.filequeue import Empty
     import crawler.model as model
     from crawler.settings import *
     import crawler.validate as validate
@@ -220,7 +222,7 @@ class BaseUrl(list):
                     while True:
                         try:
                             existing_link = link_queue.get()
-                        except StopIteration:
+                        except (StopIteration, Empty):
                             break
                         self.history.put(existing_link)
                         temp_link_queue.put(existing_link)
@@ -235,7 +237,7 @@ class BaseUrl(list):
                     while True:
                         try:
                             link_queue.put(temp_link_queue.get())
-                        except StopIteration:
+                        except (StopIteration, Empty):
                             break
                 self.add_to_history(url)
                 link_queue.put(url)
