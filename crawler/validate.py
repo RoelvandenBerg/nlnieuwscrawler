@@ -30,16 +30,15 @@ def url(url_):
     :param url_: url to check
     :return: True if url is valid
     """
-    url_extensions = ["htm", "com", "org", "edu", "gov"]
     url_ = url_.strip(r'/')
+    not_valid = ['pdf', 'zip', 'xml', '.gz', 'csv', 'wav', 'mp3']
     try:
-        docxtest = not (url_[-1] == 'x' and url_[-5] == ".")
+        docxtest = not (url_[-1] == 'x' and url_[-5] == ".") or url_[-5:] == ".aspx"
     except IndexError:
         docxtest = True
     try:
-        match = (url_[-3] in url_extensions or not url_[-4] == ".") \
-                and docxtest \
-                and not any(nofollowtxt in url_ for nofollowtxt in NOFOLLOW)
+        match = docxtest and url_[-3:] not in not_valid and not any(
+            nofollowtxt in url_ for nofollowtxt in NOFOLLOW)
     except IndexError:
         return True
     return match
@@ -74,8 +73,11 @@ def iri_to_uri(iri):
     ])
 
 
+file_regex = re.compile('''[\\\n\t\s;:\'\"!@#$%\*\(\)=\+<>\?\|\{\}~`\^\[\]]''')
+
+
 def filename(name, check_ext=True):
-    f = re.sub('''[\\\n\t\s;:\'\"!@#$%\*\(\)=\+<>\?\|\{\}~`\^\[\]]''', '', name)
+    f = file_regex.sub('', name).replace('//', '/').replace('..', '.')
     if len(f) > 80:
         ext = f.split('.')[-1]
         if len(ext) < 6 and check_ext:

@@ -12,7 +12,4 @@ In `nlnieuwscrawler/` run:
 #### WISHLIST:
 * Update Readme
 * Add setup.py
-* Harvest contextual data (abbreveations, etc.)
-* Add tests
-* Add geolocation
 

@@ -1,10 +1,4 @@
 USER_AGENT = 'Python-urllib/3.4'
-USER_AGENT_INFO = {
-          'name' : 'python crawler',
-          'organisation': '-',
-          'location' : 'Unknown',
-          'language' : 'Python 3'
-}
 
 SITES = [
     # 'http://www.delpher.nl',   # only available for research
@@ -151,21 +145,15 @@ SITES = [
     'https://www.villamedia.nl',
 ]
 
+SITES = SITES[-50:-40] # -50:-45
+
 # SITES = ['http://www.dvhn.nl/']
 
-ALWAYS_INCLUDE_BASE_IN_CRAWLABLE_LINK_QUEUE = False
-CRAWL_DEPTH = 0         # depth of links followed outside of base url
-CRAWL_DELAY = 5         # seconds of waiting time for each time crawled
-REVISIT_AFTER = 15      # revisit time in days
-MAX_THREADS = 50        # number of threads running at once
-MAX_CONCURRENT_SITEMAPS = 50  # number of sitemaps allowed to be fetched at once
+CRAWL_DELAY = 1         # seconds of waiting time for each time crawled
+MAX_THREADS = 10        # number of threads running at once
+MAX_CONCURRENT_SITEMAPS = 3  # number of sitemaps allowed to be fetched at once
 
-DATE_TIME_DISTANCE = 4  # allowed distance in characters between date and time
-
-VERBOSE = False
-DATABASE_FILENAME = 'nieuwscrawltest.sqlite3'
 LOG_FILENAME = 'nieuwscrawltest.log'
-RESET_DATABASE = False
 
 NOFOLLOW = [
     "creativecommons",

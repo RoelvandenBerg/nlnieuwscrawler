@@ -1,259 +1,433 @@
-# -*- coding: utf-8 -*-
-__author__ = 'roelvdberg@gmail.com'
-
-from datetime import datetime as dt
+import datetime
+import gc
+import gzip
 import logging
+import os.path
+import shutil
+import pybloom.pybloom
+import re
 import threading
 import time
-import urllib.error
 import urllib.parse
+import urllib.request
+
+import lxml
+import lxml.etree
 
 try:
-    import base as base_
-    from filequeue import Empty
-    import model
-    import robot
-    from settings import *
+    import filequeue
+    from settings import USER_AGENT, SITES, MAX_CONCURRENT_SITEMAPS, \
+        MAX_THREADS, CRAWL_DELAY, LOG_FILENAME
     import validate
-    import webpage
-    from webpage import remove_file
+    import robot
 except ImportError:
-    import crawler.base as base_
-    from crawler.filequeue import Empty
-    import crawler.model as model
-    import crawler.robot as robot
-    from crawler.settings import *
+    import crawler.filequeue as filequeue
+    from crawler.settings import USER_AGENT, SITES, \
+        MAX_CONCURRENT_SITEMAPS, MAX_THREADS, CRAWL_DELAY, LOG_FILENAME
     import crawler.validate as validate
-    import crawler.webpage as webpage
-    from crawler.webpage import remove_file
+    import crawler.robot as robot
+
+
+def logger_setup(name):
+    # setup logger
+    logger = logging.getLogger(name)
+    print_logger = logging.StreamHandler()
+    print_logger.setLevel(logging.DEBUG)
+    logger.addHandler(print_logger)
+    return logger
 
 logging.basicConfig(filename=LOG_FILENAME, level=logging.DEBUG)
-logger = base_.logger_setup(__name__)
-logger.debug("NEW_CRAWL_RUN | " + dt.now().strftime('%H:%M | %d-%m-%Y |'))
+logger = logger_setup(__name__)
+
+base_regex_http = re.compile(r"^(https?://[\w\-_\.]+)", re.IGNORECASE)
+base_regex = re.compile(r"^(?:https?://)([\w\-_\.]+)", re.IGNORECASE)
+file_regex = re.compile(r"^(https?://[\w\-_\.]+/?)", re.IGNORECASE)
 
 
-ENCODINGS = ['utf_8', 'latin_1', 'utf_16', 'utf_16_be', 'utf_16_le', 'utf_32',
-             'utf_32_be', 'utf_32_le', 'utf_7', 'base64_codec', 'big5',
-             'big5hkscs', 'bz2_codec', 'cp037', 'cp1026', 'cp1125', 'cp1140',
-             'cp1250', 'cp1251', 'cp1252', 'cp1253', 'cp1254', 'cp1255',
-             'cp1256', 'cp1257', 'cp1258', 'cp273', 'cp424', 'cp437',
-             'cp500',  'cp775', 'cp850', 'cp852', 'cp855', 'cp857', 'cp858',
-             'cp860', 'cp861', 'cp862', 'cp863', 'cp864', 'cp865', 'cp866',
-             'cp869', 'cp932', 'cp949', 'cp950', 'euc_jis_2004', 'euc_jisx0213',
-             'euc_jp', 'euc_kr', 'gb18030', 'gb2312', 'gbk', 'hex_codec',
-             'hp_roman8', 'hz', 'iso2022_jp', 'iso2022_jp_1', 'iso2022_jp_2',
-             'iso2022_jp_2004', 'iso2022_jp_3', 'iso2022_jp_ext', 'iso2022_kr',
-             'iso8859_10', 'iso8859_11', 'iso8859_13', 'iso8859_14',
-             'iso8859_15', 'iso8859_16', 'iso8859_2', 'iso8859_3', 'iso8859_4',
-             'iso8859_5', 'iso8859_6', 'iso8859_7', 'iso8859_8', 'iso8859_9',
-             'johab', 'koi8_r', 'mac_cyrillic', 'mac_greek', 'mac_iceland',
-             'mac_latin2', 'mac_roman', 'mac_turkish', 'mbcs', 'ptcp154',
-             'quopri_codec', 'rot_13', 'shift_jis', 'shift_jis_2004',
-             'shift_jisx0213', 'tactis', 'tis_620', 'uu_codec', 'zlib_codec',
-             'ascii']
+def parse_base(url, http=False):
+    if http:
+        return base_regex_http.findall(url)[0]
+    return base_regex.findall(url)[0]
 
 
-ENCODINGS = list(reversed(ENCODINGS))
+def parse_filename(url):
+    filename = file_regex.sub("", url)
+    if not filename:
+        filename = parse_base(url)
+    return validate.filename(filename)
 
 
-class Website(object):
+def base_filename(url):
+    return validate.filename(parse_base(url))
+
+
+def download_to_disk(url, data_dir='data'):
     """
-    Website crawler that crawls all pages in a website.
-    """
+    Fetches the content of a webpage, based on an url.
 
-    def __init__(self, base, link_queue, page=webpage.WebpageRaw,
-                 base_url=None, depth=0, database_lock=None):
-        """
-        :param base: base url string .
-        :param link_queue: queue from base url.
-        :param page: WebPage class or one of its children.
-        :param base_url: BaseUrl object that at least contains this website.
-        :param depth: crawl depth of this website.
-        """
-        self.encoding = ENCODINGS[:]
-        if not database_lock:
-            self.database_lock = threading.RLock()
+    Apart from the arguments described below, extra arguments and key-value
+    pairs will be handed over to the parse method. View that method for
+    the extra possible parameters.
+
+    :param url: the url which content will be downloaded.
+    """
+    header = {'User-Agent': USER_AGENT}
+    url = validate.iri_to_uri(url)
+    filename = parse_filename(url).strip('/') + ".crawled"
+    base_directory = base_filename(url)
+    path = os.path.join(data_dir, base_directory, filename)
+    dir_path = os.path.dirname(path)
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
+
+    # download to disk
+    with urllib.request.urlopen(urllib.request.Request(url, headers=header)) as\
+            response, open(path, 'wb') as f:
+        f.write(response.read())
+    logger.debug(
+        '%s Saving %s to disk. Parsing from disk',
+        datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+        filename
+    )
+    return path, url
+
+
+def file_iter(filename, tags, as_html=True):
+    """
+    fast_iter is useful if you need to free memory while iterating through a
+    very large XML file.
+
+    http://lxml.de/parsing.html#modifying-the-tree
+    Based on Liza Daly's fast_iter
+    http://www.ibm.com/developerworks/xml/library/x-hiperfparse/
+    See also http://effbot.org/zone/element-iterparse.htm
+
+    :returns: current tag, and a dictionary with values for each given
+        name. {name: value, ...}
+    """
+    if not hasattr(tags, '__iter__'):
+        tags = [tags]
+    with open(filename, 'rb') as fileobj:
+        context = lxml.etree.iterparse(fileobj, events=('end',), tag=tags,
+                                  html=as_html)
+        for event, elem in context:
+            yield elem
+            # It's safe to call clear() here because no descendants will be
+            # accessed
+            elem.clear()
+            # Also eliminate now-empty references from the root node to elem
+            while elem.getprevious() is not None:
+                del elem.getparent()[0]
+        del context
+
+
+def url_belongs_to_base(url, base):
+    """
+    Makes sure mobile versions are also attributed to base url.
+    :param url: url of webpage to check
+    :param base: base url for website
+    :return: boolean if url falls within base.
+    """
+    if url.startswith(r'http://m.') or base.startswith(r'http://m.'):
+        url = url.strip(r'http://').strip('m.').strip('www.')
+        base = base.strip(r'http://').strip('m.').strip('www.')
+    return url.startswith(base)
+
+
+def add_url(base, new_url, history, history_lock, url_queue, robot_txt):
+    try:
+        if url_belongs_to_base(new_url, base):
+            new_base = base
         else:
-            self.database_lock = database_lock
-        self.session = model.Session()
-        self.base = base
-        self.has_content = True
-        if base_url:
-            self.base_url = base_url
-        else:
-            self.base_url = base_.BaseUrl(base=base,
-                                         database_lock=self.database_lock)
-        self.robot_txt = robot.Txt(
-            url=urllib.parse.urljoin(base, 'robots.txt'),
-            base_url=self.base_url
+            new_base = parse_base(new_url, http=True)
+    except IndexError:
+        new_base = base
+        new_url = urllib.parse.urljoin(base, new_url)
+    if "#" in new_url:
+        new_url = new_url.split('#')[0]
+        if not len(new_url):
+            return
+    if not validate.url_explicit(new_url):
+        return
+    if not new_url in history:
+        with history_lock:
+            history.add(new_url)
+        if new_base in SITES and robot_txt.can_fetch(USER_AGENT, new_url):
+            url_queue.put(new_url)
+
+
+def namespace(filename):
+    try:
+        with open(filename, 'rb') as fileobj:
+            context = lxml.etree.iterparse(fileobj, events=('end',))
+            namespace_ = next(context)[1].nsmap
+            # logger.debug('NAMESPACE: ' + str(namespace))
+            return "{" + namespace_[None] + "}"
+    except (KeyError, lxml.etree.XMLSyntaxError):
+        return ""
+
+
+def fits_xml(filename):
+    with open(filename, 'rb') as fileobj:
+        context = lxml.etree.iterparse(fileobj, events=('end',),
+                                       tag=namespace(filename) + 'url')
+        try:
+            next(context)
+            return parse_xml_urlset
+        except (StopIteration, lxml.etree.XMLSyntaxError):
+            return parse_xml_sitemapindex
+
+
+def parse_xml_sitemapindex(path, sitemap_queue, **kwargs):
+    tag = namespace(path) + 'loc'
+    for elem in file_iter(path, tag, False):
+        sitemap_url = elem.text
+        sitemap_queue.put(sitemap_url)
+    os.remove(path)
+
+
+def parse_xml_urlset(base, path, url_queue, history, history_lock, robot_txt,
+                     **kwargs):
+    tag = namespace(path) + 'loc'
+    for elem in file_iter(path, tag, False):
+        new_url = elem.text
+        add_url(base, new_url, history, history_lock, url_queue, robot_txt)
+    os.remove(path)
+
+
+def unzip_gzip(filename):
+    zipped = gzip.GzipFile(filename=filename, mode='rb')
+    new_filename = filename + 'unzipped'
+    with open(new_filename, 'w') as new_file:
+        new_file.write(zipped.read().decode('utf-8'))
+    os.remove(filename)
+    return new_filename
+
+
+def download_sitemap(url, base, data_dir):
+    # determine what type of sitemap it entails.
+    if url == '/sitemapindex/':
+        logger.debug('%s XML sitemap chosen: %s',
+                     datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), url)
+        url = urllib.parse.urljoin(base, "sitemapindex")
+        parser = parse_xml_sitemapindex
+    path, _ = download_to_disk(url, data_dir=data_dir)
+    if url.endswith('.gz'):
+        logger.debug('%s GunZip sitemap chosen: %s',
+                     datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), url)
+        path = unzip_gzip(path)
+        parser = fits_xml(path)
+    elif url.endswith('.xml') or (url.startswith('google') and
+                                  url.endswith('map')):
+        logger.debug('%s XML sitemap chosen: %s',
+                     datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), url)
+        parser = fits_xml(path)
+    elif url == '/sitemapindex/':
+        pass
+    else:
+        logger.debug(
+            '%s unknown sitemaptype, switching to XML sitemap Index: %s',
+            datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), url)
+        parser = fits_xml(path)
+    return url, parser, path
+
+
+def sitemap_worker(base, sitemap_queue, url_queue, history, history_lock,
+                   robot_txt, data_dir='data/sitemaps'):
+    while True:
+        delay = time.time()
+        try:
+            sitemap_url = sitemap_queue.get()
+            logger.debug(
+                '%s loading sitemap: %s',
+                datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                sitemap_url
+            )
+        except filequeue.Empty:
+            # logger.debug(
+            #     "%s Base %s has no more sitemaps",
+            #     datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), base)
+            break
+        url, sitemap_parser, path = download_sitemap(
+            sitemap_url, base, data_dir)
+        logger.debug(
+            '%s parsing sitemap: %s at path: %s',
+            datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+            url, path
+        )
+        sitemap_parser(
+            path=path,
+            base=base,
+            url_queue=url_queue,
+            sitemap_queue=sitemap_queue,
+            history=history,
+            history_lock=history_lock,
+            robot_txt=robot_txt
         )
         try:
-            self.robot_txt.read()
-        except Exception as e:
-            logger.exception("Error: {} @webpage with base {}".format(
-                e, self.base))
-        self.links = link_queue
-        self.depth = depth
-        self.base_url.add_links(
-            link_container=self.robot_txt.sitemap,
-            depth=self.depth,
-            base=self.base
-        )
-        logger.debug('SITEMAP READ FOR: ' + self.base)
-        self.webpage = page
+            time.sleep(delay + CRAWL_DELAY - time.time())
+        except ValueError:
+            pass
 
-    def _can_fetch(self, url_):
-        """
-        Tests if robots.txt accepts url_ as crawlable.
-        :param url_: url to be tested
-        :return: True or False
-        """
-        return self.robot_txt.can_fetch(USER_AGENT, url_)
 
-    def run(self):
-        """Runs a website crawler."""
-        while self.has_content:
-            start_time = time.time()
-            try:
-                self._run_once()
-            except Empty:
-                self.has_content = False
-            except Exception as e:
-                logger.exception("Error: {} @webpage with base {}".format(
-                    e, self.base))
-            try:
-                wait_time_left = self.robot_txt.crawl_delay + start_time - \
-                             time.time()
-                time.sleep(wait_time_left)
-            except (ValueError, IOError):
-                wait_time_left = 1
-                while wait_time_left > 0:
-                    wait_time_left = self.robot_txt.crawl_delay + start_time - \
-                             time.time()
+def iter_hyperlinks(path):
+    for elem in file_iter(path, 'a', True):
+        yield elem.get('href')
 
-    def _run_once(self):
-        """Runs one webpage of a website crawler."""
-        logger.debug('WEBSITE: Running webpage: {url}'
-                     .format(url=str(self.base)))
-        link = self.links.get()
-        if not self._can_fetch(link):
-            logger.debug('WEBSITE: webpage {} cannot be fetched.'
-                         .format(link))
-            return
-        filename = validate.filename('../data/thread_{}_{}.data'.format(
-            self.base.split('.')[-2].split('/')[-1], link.split('/')[-1]))
-        while True:
-            try:
-                page = self.webpage(
-                    url=link,
-                    base=self.base,
-                    database_lock=self.database_lock,
-                    encoding=self.encoding[-1],
-                    save_file=True,
-                    filename=filename,
-                    persistent=True
-                )
-                if page.followable:
-                    urlfetcher = webpage.Links(
-                        url=link,
-                        base=self.base,
-                        html=page.html,
-                        download=False,
-                        save_file=True,
-                        filename=page.filename,
-                        persistent=True
-                    )
-                    self.base_url.add_links(
-                        link_container=urlfetcher,
-                        depth=self.depth,
-                        base=self.base
-                    )
-                else:
-                    logger.debug('WEBSITE: webpage not followable: {}'.format(link))
-                if page.archivable:
-                    try:
-                        page.store()
-                    except (TypeError, AttributeError):
-                        logger.debug(
-                            'WEBSITE: store content not working for page: {}'
-                                .format(link))
-                else:
-                    logger.warn('WEBSITE: webpage not archivable: {}'.format(link))
-            except urllib.error.HTTPError:
-                logger.debug('WEBSITE: HTTP error @ {}'.format(link))
-                remove_file(filename)
-                return
-            except UnicodeDecodeError:
-                self.encoding.pop()
-                time.sleep(CRAWL_DELAY)
-                continue
-            break
-        remove_file(filename)
-        if page.encoding != self.encoding[-1]:
-            self.encoding.append(page.encoding)
-        del urlfetcher
-        del page
+
+def webpage_worker(base, url_queue, history, history_lock, robot_txt,
+                   data_dir='data'):
+    while True:
+        delay = time.time()
+        try:
+            url = url_queue.get()
+            logger.debug(
+                '%s Crawling %s',
+                datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                url
+            )
+        except filequeue.Empty:
+            logger.debug(
+                '%s %s worker empty, stopping',
+                datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), base)
+            break  # This can be problematic when larger crawl depth is allowed
+        try:
+            path, url = download_to_disk(url, data_dir=data_dir)
+        except urllib.error.HTTPError:
+            logger.error(
+                '%s url %s raises HTTP statuscode',
+                datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), url)
+            continue
+        with history_lock:
+            with open(os.path.join(data_dir, 'crawled.csv'), 'a') as crawled:
+                crawled_line = [
+                    datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                    url, path
+                ]
+                crawled.write(';'.join(crawled_line) + "\n")
+        logger.debug('%s %s saved to disk',
+                     datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), path)
+        for new_url in iter_hyperlinks(path):
+            add_url(base, new_url, history, history_lock, url_queue, robot_txt)
+        try:
+            time.sleep(delay + CRAWL_DELAY - time.time())
+        except ValueError:
+            pass
 
 
 class Crawler(object):
-    """
-    Crawler that crawls sites based on a sitelist.
-    Results are stored in a database defined in model.
-    """
-    def __init__(self, sitelist, page=webpage.WebpageRaw):
-        """
-        :param sitelist: a list of sites to be crawled.
-        :param page: webpage class used for crawling
-        """
-        self.database_lock = threading.RLock()
-        self.base_url = base_.BaseUrl(sitelist, self.database_lock)
-        self.websites = []
-        self.webpage = page
 
-    def run(self):
-        """Run crawler"""
-        number_of_website_threads = 1
-        # Run while there are still active website-threads left.
-        while number_of_website_threads > 0:
-            # Run as much threads as MAX_THREADS (from settings) sets.
-            while 0 < number_of_website_threads <= MAX_THREADS:
-                # start a new website thread:
-                self.run_once()
-                number_of_website_threads = threading.activeCount() - 1
-        logger.debug("CRAWLER: Finished")
-        logger.debug("CRAWLER:\n" + repr(self.base_url))
-
-    def run_once(self):
-        try:
-            base_url_queue_item = self.base_url.base_queue.get()
-            thread = threading.Thread(
-                target=self._website_worker,
-                args=(base_url_queue_item,)
+    def __init__(self, bloomfilter_max=100000):
+        self.sitemap_base_queue = filequeue.FileQueue(
+            directory="data/queues/", name='sitemap_base_queue')
+        self.base_queue = filequeue.FileQueue(directory="data/queues/",
+                                              name='base_queue')
+        self.url_queues = {}
+        self.sitemap_queues = {}
+        self.sitemap_semaphore = threading.Semaphore(MAX_CONCURRENT_SITEMAPS)
+        self.crawl_semaphore = threading.Semaphore(MAX_THREADS)
+        self.history = pybloom.pybloom.ScalableBloomFilter(
+                initial_capacity=bloomfilter_max,
+                error_rate=0.0001,
+                mode=pybloom.pybloom.ScalableBloomFilter.SMALL_SET_GROWTH
             )
-            thread.start()
-        except Empty:
-            pass #logger.debug("Queue of base urls is empty.")
+        self.history_lock = threading.RLock()
+        self.robots = {}
+        for site in SITES:
+            logger.debug(
+                '%s initializing: %s',
+                datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                site
+            )
+            site = parse_base(site, http=True)
+            filename = base_filename(site)
+            self.base_queue.put(site)
+            self.sitemap_base_queue.put(site)
+            url_queue = filequeue.FileQueue(directory="data/queues/",
+                                            name=filename + '.queue',
+                                            persistent=True, overwrite=True)
+            sitemap_queue = filequeue.FileQueue(directory="data/queues/",
+                                                name='sitemap_' + filename)
+            url_queue.put(site)
+            self.url_queues[site] = url_queue
+            with self.history_lock:
+                self.history.add(site)
+            site_robot = robot.Txt(urllib.parse.urljoin(site, 'robots.txt'))
+            site_robot.read(sitemap_queue)
+            self.sitemap_queues[site] = sitemap_queue
+            self.robots[site] = site_robot
 
-    def _website_worker(self, base_url_queue_item):
-        """
-        Worker that crawls one website.
-        :param base: base instance from base_queue from a BaseUrl object.
-        """
-        base, depth = base_url_queue_item
-        link_queue = self.base_url[depth][base]
-        logger.debug("CRAWLER: run for {} depth: {}".format(base, depth))
-        website = Website(
-            base=base,
-            link_queue=link_queue,
-            page=self.webpage,
-            base_url=self.base_url,
-            depth=depth,
-            database_lock=self.database_lock
-        )
-        website.run()
-        self.websites.append(website)
+    def run(self, sitemaps=True, pages=True):
+        if sitemaps:
+            self.collect_sitemaps()
+        if pages:
+            self.crawl_pages()
+
+    def collect_sitemaps(self):
+        threads_running = 1
+        all_sitemaps_started = False
+        while threads_running:
+            if not all_sitemaps_started:
+                with self.sitemap_semaphore:
+                    try:
+                        base = self.sitemap_base_queue.get()
+                    except filequeue.Empty:
+                        logger.debug('%s all sitemap threads have started.',
+                            datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                        )
+                        all_sitemaps_started = True
+                        continue
+                    logger.debug(
+                        '%s starting sitemap %s',
+                        datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                        base
+                    )
+                    thread = threading.Thread(
+                        target=sitemap_worker,
+                        args=(
+                            base, self.sitemap_queues[base], self.url_queues[base],
+                            self.history, self.history_lock, self.robots[base]
+                        )
+                    )
+                    thread.start()
+            threads_running = threading.activeCount() - 1
+        del self.sitemap_semaphore
+        del self.sitemap_queues
+        del self.sitemap_base_queue
+        gc.collect()
+        logger.debug("%s Sitemaps collected",
+                     datetime.datetime.now().strftime('%Y-%m-%d %H:%M'))
+
+    def crawl_pages(self):
+        threads_running = 1
+        all_pages_started = False
+        while threads_running:
+            if not all_pages_started:
+                with self.crawl_semaphore:
+                    try:
+                        base = self.base_queue.get()
+                    except filequeue.Empty:
+                        logger.debug('%s all sitemap threads have started.',
+                            datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                        )
+                        all_pages_started = True
+                        continue
+                    thread = threading.Thread(
+                        target=webpage_worker,
+                        args=(base, self.url_queues[base], self.history,
+                              self.history_lock, self.robots[base])
+                    )
+                    thread.start()
+            threads_running = threading.activeCount() - 1
+        logger.debug("%s Webpages collected",
+                     datetime.datetime.now().strftime('%Y-%m-%d %H:%M'))
 
 
 if __name__ == "__main__":
-    dutch_news_crawler = Crawler(SITES)
-    dutch_news_crawler.run()
+    try:
+        shutil.rmtree('data')
+    except FileNotFoundError:
+        pass
+    crawler = Crawler()
+    crawler.run(sitemaps=True, pages=True)
+

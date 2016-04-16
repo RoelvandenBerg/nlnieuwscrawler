@@ -6,13 +6,9 @@ import urllib.robotparser as robotparser
 
 
 try:
-    from base import logger_setup
-    from settings import CRAWL_DELAY
-    import sitemap
+    from crawl import logger_setup
 except ImportError:
-    from crawler.base import logger_setup
-    from crawler.settings import CRAWL_DELAY
-    import crawler.sitemap as sitemap
+    from crawler.crawl import logger_setup
 
 
 logger = logger_setup(__name__)
@@ -27,13 +23,23 @@ class Txt(robotparser.RobotFileParser):
     - logging
     """
 
-    def __init__(self, url, base_url):
-        self.base_url = base_url
-        self.sitemap = ()
-        self.crawl_delay = CRAWL_DELAY
-        super().__init__(url)
+    def read(self, sitemap_queue):
+        """Reads the robots.txt URL and feeds it to the parser."""
+        try:
+            f = urllib.request.urlopen(self.url)
+        except urllib.error.HTTPError as err:
+            if err.code in (401, 403):
+                self.disallow_all = True
+            elif err.code >= 400 and err.code < 500:
+                self.allow_all = True
+        else:
+            raw = f.read()
+            sitemap_queue = self.parse(
+                raw.decode("utf-8").splitlines(), sitemap_queue)
+        finally:
+            return sitemap_queue
 
-    def parse(self, lines):
+    def parse(self, lines, sitemap_queue):
         """Parse the input lines from a robots.txt file.
 
         We allow that a user-agent: line is not preceded by
@@ -85,20 +91,15 @@ class Txt(robotparser.RobotFileParser):
                         state = 2
                 elif line[0] == 'sitemap':
                     sitemap_url = line[1]
-                    with self.base_url.sitemap_semaphore:
-                        if self.sitemap:
-                            self.sitemap.append(sitemap_url)
-                        else:
-                            self.sitemap = sitemap.Sitemap(
-                                urls=sitemap_url,
-                                base=self.url.strip('/robots.txt'),
-                            )
+                    logger.debug('adding sitemap %s', sitemap_url)
+                    sitemap_queue.put(sitemap_url)
                 elif line[0].lower().startswith('crawl-delay'):
                     new_delay = float(line[1])
                     if self.crawl_delay < new_delay:
                         self.crawl_delay = new_delay
         if state == 2:
             self._add_entry(entry)
+        return sitemap_queue
 
     def can_fetch(self, useragent, url):
         """using the parsed robots.txt decide if useragent can fetch url"""
