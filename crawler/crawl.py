@@ -439,10 +439,6 @@ class Crawler(object):
 
 
 if __name__ == "__main__":
-    try:
-        shutil.rmtree('data')
-    except FileNotFoundError:
-        pass
     crawler = Crawler()
     crawler.run(sitemaps=True, pages=True)
 
