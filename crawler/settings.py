@@ -155,6 +155,8 @@ MAX_CONCURRENT_SITEMAPS = 3  # number of sitemaps allowed to be fetched at once
 
 LOG_FILENAME = 'nieuwscrawltest.log'
 
+ROBOT_NOFOLLOW = ["noarchive", "nosnippet", "noindex", 'nofollow']
+
 NOFOLLOW = [
     "creativecommons",
     "facebook",

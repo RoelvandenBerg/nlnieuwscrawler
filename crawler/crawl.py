@@ -17,13 +17,14 @@ import lxml.etree
 try:
     import filequeue
     from settings import USER_AGENT, SITES, MAX_CONCURRENT_SITEMAPS, \
-        MAX_THREADS, CRAWL_DELAY, LOG_FILENAME
+        MAX_THREADS, CRAWL_DELAY, LOG_FILENAME, ROBOT_NOFOLLOW
     import validate
     import robot
 except ImportError:
     import crawler.filequeue as filequeue
     from crawler.settings import USER_AGENT, SITES, \
-        MAX_CONCURRENT_SITEMAPS, MAX_THREADS, CRAWL_DELAY, LOG_FILENAME
+        MAX_CONCURRENT_SITEMAPS, MAX_THREADS, CRAWL_DELAY, LOG_FILENAME, \
+        ROBOT_NOFOLLOW
     import crawler.validate as validate
     import crawler.robot as robot
 
@@ -272,11 +273,20 @@ def sitemap_worker(base, sitemap_queue, url_queue, history, history_lock,
 
 def iter_hyperlinks(path):
     for elem in file_iter(path, 'a', True):
-        yield elem.get('href')
+        href = elem.get('href')
+        robots = elem.get('robots')
+        if href and robots not in ROBOT_NOFOLLOW:
+            yield href
+        elif href:
+            logger.debug('%s crawling not allowed for: %s by robots attribute',
+                         datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+                         href)
 
 
 def webpage_worker(base, url_queue, history, history_lock, robot_txt,
                    data_dir='data'):
+    if base is None:
+        raise TypeError('Base {} is None!'.format(base))
     while True:
         delay = time.time()
         try:
@@ -308,7 +318,8 @@ def webpage_worker(base, url_queue, history, history_lock, robot_txt,
         logger.debug('%s %s saved to disk',
                      datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), path)
         for new_url in iter_hyperlinks(path):
-            add_url(base, new_url, history, history_lock, url_queue, robot_txt)
+            add_url(base, new_url, history, history_lock, url_queue,
+                    robot_txt)
         try:
             time.sleep(delay + CRAWL_DELAY - time.time())
         except ValueError:
@@ -340,6 +351,8 @@ class Crawler(object):
                 site
             )
             site = parse_base(site, http=True)
+            if site is None:
+                raise TypeError('Base {} is None!'.format(site))
             filename = base_filename(site)
             self.base_queue.put(site)
             self.sitemap_base_queue.put(site)
@@ -406,6 +419,8 @@ class Crawler(object):
                 with self.crawl_semaphore:
                     try:
                         base = self.base_queue.get()
+                        if base is None:
+                            raise TypeError('Base {} is None!'.format(base))
                     except filequeue.Empty:
                         logger.debug('%s all sitemap threads have started.',
                             datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
